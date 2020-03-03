@@ -1,0 +1,155 @@
+标准库
+
+名称                    摘要
+archive
+     tar                tar包实现了tar格式压缩文件的存取.
+     zip                zip包提供了zip档案文件的读写服务.
+bufio                   bufio 包实现了带缓存的I/O操作.
+builtin                 builtin 包为Go的预声明标识符提供了文档.
+bytes                   bytes包实现了操作[]byte的常用函数.
+compress
+     bzip2              bzip2包实现bzip2的解压缩.
+     flate              flate包实现了deflate压缩数据格式，参见RFC 1951.
+     gzip               gzip包实现了gzip格式压缩文件的读写，参见RFC 1952.
+     lzw                lzw包实现了Lempel-Ziv-Welch数据压缩格式，这是一种T. A. Welch在“A Technique for High-Performance Data Compression”一文（Computer, 17(6) (June 1984), pp 8-19）提出的一种压缩格式.
+     zlib               zlib包实现了对zlib格式压缩数据的读写，参见RFC 1950.
+container
+     heap               heap包提供了对任意类型（实现了heap.Interface接口）的堆操作.
+     list               list包实现了双向链表.
+     ring               ring实现了环形链表的操作.
+context                 包上下文定义了上下文类型，该类型在API边界之间以及进程之间携带截止日期，取消信号和其他请求范围的值。
+crypto                  crypto包搜集了常用的密码（算法）常量.
+     aes                aes包实现了AES加密算法，参见U.S. Federal Information Processing Standards Publication 197.
+     cipher             cipher包实现了多个标准的用于包装底层块加密算法的加密算法实现.
+     des                des包实现了DES标准和TDEA算法，参见U.S. Federal Information Processing Standards Publication 46-3.
+     dsa                dsa包实现FIPS 186-3定义的数字签名算法（Digital Signature Algorithm），即DSA算法.
+     ecdsa              ecdsa包实现了椭圆曲线数字签名算法，参见FIPS 186-3.
+     elliptic           elliptic包实现了几条覆盖素数有限域的标准椭圆曲线.
+     hmac               hmac包实现了U.S. Federal Information Processing Standards Publication 198规定的HMAC（加密哈希信息认证码）.
+     md5                md5包实现了MD5哈希算法，参见RFC 1321.
+     rand               rand包实现了用于加解密的更安全的随机数生成器.
+     rc4                rc4包实现了RC4加密算法，参见Bruce Schneier's Applied Cryptography.
+     rsa                rsa包实现了PKCS#1规定的RSA加密算法.
+     sha1               sha1包实现了SHA1哈希算法，参见RFC 3174.
+     sha256             sha256包实现了SHA224和SHA256哈希算法，参见FIPS 180-4.
+     sha512             sha512包实现了SHA384和SHA512哈希算法，参见FIPS 180-2.
+     subtle             subtle的实现了加密代码中有用的功能，但是需要仔细考虑才能正确使用。
+     tls                tls包实现了TLS 1.2，细节参见RFC 5246.
+     x509               x509包解析X.509编码的证书和密钥.
+          pkix          pkix包提供了共享的、低层次的结构体，用于ASN.1解析和X.509证书、CRL、OCSP的序列化.
+database
+     sql                sql 包提供了通用的SQL（或类SQL）数据库接口.
+          driver        driver包定义了应被数据库驱动实现的接口，这些接口会被sql包使用.
+debug
+     dwarf              dwarf软件包提供对从可执行文件加载的DWARF调试信息的访问权限，如DWARF 2.0标准中所定义，该信息位于http://dwarfstd.org/doc/dwarf-2.0.0.pdf
+     elf                程序包elf实现了对ELF对象文件的访问。
+     gosym              软件包gosym实现了对gc编译器生成的Go二进制文件中嵌入的Go符号和行号表的访问。
+     macho              软件包macho可以实现对Mach-O对象文件的访问。
+     pe                 程序包pe实现对PE（Microsoft Windows Portable可执行文件）文件的访问。
+     plan9obj           程序包plan9obj实现对Plan 9 a.out对象文件的访问。
+encoding                encoding包定义了供其它包使用的可以将数据在字节水平和文本表示之间转换的接口.
+     ascii85            ascii85 包是对 ascii85 的数据编码的实现.
+     asn1               asn1包实现了DER编码的ASN.1数据结构的解析，参见ITU-T Rec X.690.
+     base32             base32包实现了RFC 4648规定的base32编码.
+     base64             base64实现了RFC 4648规定的base64编码.
+     binary             binary包实现了简单的数字与字节序列的转换以及变长值的编解码.
+     csv                csv读写逗号分隔值（csv）的文件.
+     gob                gob包管理gob流——在编码器（发送器）和解码器（接受器）之间交换的binary值.
+     hex                hex包实现了16进制字符表示的编解码.
+     json               json包实现了json对象的编解码，参见RFC 4627.
+     pem                pem包实现了PEM数据编码（源自保密增强邮件协议）.
+     xml                包xml实现了一个简单的XML 1.0解析器，该解析器可以理解XML名称空间。
+errors                  error 包实现了用于错误处理的函数.
+expvar                  expvar包提供了公共变量的标准接口，如服务的操作计数器.
+flag                    flag 包实现命令行标签解析.
+fmt                     fmt 包实现了格式化I/O函数，类似于C的 printf 和 scanf.
+go
+     ast                包ast声明用于表示Go包语法树的类型。
+     build              build包收集有关Go软件包的信息。
+     constant           constant包实现了表示无类型Go常量的值及其相应的操作。
+     doc                doc包从Go AST中提取源代码文档。
+     format             format实现Go源代码的标准格式。
+     importer           importer提供对导出数据导入器的访问。
+     parser             parser实现了Go源文件解析器。
+     printer            printer实现AST节点的打印。
+     scanner            scanner包实现了Go源文件的扫描。
+     token              token包定义代表Go编程语言的词法标记的常量以及对标记的基本操作（打印，谓词）。
+     types              types包声明数据类型并实现Go包类型检查的算法。
+hash                    hash包提供hash函数的接口.
+     adler32            adler32包实现了Adler-32校验和算法，参见RFC 1950.
+     crc32              crc32包实现了32位循环冗余校验（CRC-32）的校验和算法.
+     crc64              crc64包实现了64位循环冗余校验（CRC-64）的校验和算法.
+     fnv                fnv包实现了FNV-1和FNV-1a（非加密hash函数）.
+html                    html包提供了用于转义和解转义HTML文本的函数.
+     template           template包（html/template）实现了数据驱动的模板，用于生成可对抗代码注入的安全HTML输出.
+image                   image实现了基本的2D图片库.
+     color              color 包实现了基本的颜色库。
+          palette       palette包提供了标准的调色板.
+     draw               draw 包提供组装图片的方法.
+     gif                gif 包实现了GIF图片的解码.
+     jpeg               jpeg包实现了jpeg格式图像的编解码.
+     png                png 包实现了PNG图像的编码和解码.
+index
+     suffixarray        suffixarrayb包通过使用内存中的后缀树实现了对数级时间消耗的子字符串搜索.
+io                      io 包为I/O原语提供了基础的接口.
+     ioutil             ioutil 实现了一些I/O的工具函数。
+log                     log包实现了简单的日志服务.
+     syslog             syslog包提供一个简单的系统日志服务的接口.
+math                    math 包提供了基本常数和数学函数。
+     big                big 包实现了（大数的）高精度运算.
+     cmplx              cmplx 包为复数提供了基本的常量和数学函数.
+     rand               rand 包实现了伪随机数生成器.
+mime                    mime实现了MIME的部分规定.
+     multipart          multipart实现了MIME的multipart解析，参见RFC 2046.
+     quotedprintable    quotedprintable包实现RFC 2045指定的quoted-printable编码。.
+net                     net包提供了可移植的网络I/O接口，包括TCP/IP、UDP、域名解析和Unix域socket.
+     http               http包提供了HTTP客户端和服务端的实现.
+          cgi           cgi 包实现了RFC3875协议描述的CGI（公共网关接口）.
+          cookiejar     cookiejar包实现了保存在内存中的符合RFC 6265标准的http.CookieJar接口.
+          fcgi          fcgi 包实现了FastCGI协议.
+          httptest      httptest 包提供HTTP测试的单元工具.
+          httptrace     httptrace包提供了跟踪HTTP客户端请求中的事件的机制。
+          httputil      httputil包提供了HTTP公用函数，是对net/http包的更常见函数的补充.
+          pprof         pprof 包通过提供HTTP服务返回runtime的统计数据，这个数据是以pprof可视化工具规定的返回格式返回的.
+     mail               mail 包实现了解析邮件消息的功能.
+     rpc                rpc 包提供了一个方法来通过网络或者其他的I/O连接进入对象的外部方法.
+          jsonrpc       jsonrpc 包使用了rpc的包实现了一个JSON-RPC的客户端解码器和服务端的解码器.
+     smtp               smtp包实现了简单邮件传输协议（SMTP），参见RFC 5321.
+     textproto          textproto实现了对基于文本的请求/回复协议的一般性支持，包括HTTP、NNTP和SMTP.
+     url                url包解析URL并实现了查询的逸码，参见RFC 3986.
+os                      os包提供了操作系统函数的不依赖平台的接口.
+     exec               exec包执行外部命令.
+     signal             signal包实现了对输入信号的访问.
+     user               user包允许通过名称或ID查询用户帐户.
+path                    path实现了对斜杠分隔的路径的实用操作函数.
+     filepath           filepath包实现了兼容各操作系统的文件路径的实用操作函数.
+plugin                  plugin包实现Go插件的加载和符号解析。
+reflect                 reflect包实现了运行时反射，允许程序操作任意类型的对象.
+regexp                  regexp包实现了正则表达式搜索.
+     syntax             syntax将正则表达式解析为解析树，并将解析树编译为程序。
+runtime                 runtime包包含与Go的运行时系统交互的操作，例如控制goroutine的函数。
+     cgo                cgo 包含有 cgo 工具生成的代码的运行时支持.
+     debug              debug 包含有程序在运行时调试其自身的功能.
+     pprof              pprof 包按照可视化工具 pprof 所要求的格式写出运行时分析数据.
+     race               race 包实现了数据竞争检测逻辑.
+     trace              trace包包含用于程序生成Go执行跟踪器跟踪的工具。
+sort                    sort 包为切片及用户定义的集合的排序操作提供了原语.
+strconv                 strconv包实现了基本数据类型和其字符串表示的相互转换.
+strings                 strings包实现了用于操作字符的简单函数.
+sync                    sync包提供了互斥锁这类的基本的同步原语.
+     atomic             atomic 包提供了底层的原子性内存原语，这对于同步算法的实现很有用.
+syscall                 syscall包包含一个用于底层操作系统原语的接口。
+    js                  使用js/wasm体系结构时，js包可访问WebAssembly主机环境。
+testing                 testing包为Go软件包的自动化测试提供支持。
+     iotest             iotest包实现了主要用于测试的Reader和Writer。
+     quick              quick包实现了一些实用程序功能以帮助进行黑盒测试。
+text
+     scanner            scanner包提供对utf-8文本的token扫描服务.
+     tabwriter          tabwriter包实现了写入过滤器（tabwriter.Writer），可以将输入的缩进修正为正确的对齐文本.
+     template           template包实现了数据驱动的用于生成文本输出的模板.
+          parse         parse包为text/template和html/template定义的模板构建解析树。
+time                    time包提供了时间的显示和测量用的函数.
+unicode                 unicode 包提供了一些测试Unicode码点属性的数据和函数.
+     utf16              utf16 包实现了对UTF-16序列的编码和解码。
+     utf8               utf8 包实现了支持UTF-8文本编码的函数和常量.
+unsafe                  unsafe 包含有关于Go程序类型安全的所有操作.
