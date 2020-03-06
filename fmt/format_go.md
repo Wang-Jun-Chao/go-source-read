@@ -542,11 +542,13 @@ func (f *fmt) fmtQ(s string) {
     }
 }
 
+// fmtC将整数格式化为Unicode字符。
+// 如果该字符不是有效的Unicode，它将显示'\ ufffd'。
 // fmtC formats an integer as a Unicode character.
 // If the character is not valid Unicode, it will print '\ufffd'.
 func (f *fmt) fmtC(c uint64) {
     r := rune(c)
-    if c > utf8.MaxRune {
+    if c > utf8.MaxRune { // 非法utf8字符
         r = utf8.RuneError
     }
     buf := f.intbuf[:0]
@@ -554,6 +556,8 @@ func (f *fmt) fmtC(c uint64) {
     f.pad(buf[:w])
 }
 
+// fmtQc将整数格式化为单引号，转义的Go字符常量。
+// 如果该字符不是有效的Unicode，它将显示'\ ufffd'。
 // fmtQc formats an integer as a single-quoted, escaped Go character constant.
 // If the character is not valid Unicode, it will print '\ufffd'.
 func (f *fmt) fmtQc(c uint64) {
@@ -562,37 +566,43 @@ func (f *fmt) fmtQc(c uint64) {
         r = utf8.RuneError
     }
     buf := f.intbuf[:0]
-    if f.plus {
+    if f.plus { // 有+号标记
         f.pad(strconv.AppendQuoteRuneToASCII(buf, r))
     } else {
         f.pad(strconv.AppendQuoteRune(buf, r))
     }
 }
 
+// fmtFloat格式化float64。 它假定标记（verb）是有效的格式说明符
 // fmtFloat formats a float64. It assumes that verb is a valid format specifier
 // for strconv.AppendFloat and therefore fits into a byte.
 func (f *fmt) fmtFloat(v float64, size int, verb rune, prec int) {
+    // 格式说明符中的显式精度覆盖默认值
     // Explicit precision in format specifier overrules default precision.
     if f.precPresent {
         prec = f.prec
     }
+    // 格式化数字，必要时保留前导+符号的空间。
     // Format number, reserving space for leading + sign if needed.
-    num := strconv.AppendFloat(f.intbuf[:1], v, byte(verb), prec, size)
-    if num[1] == '-' || num[1] == '+' {
-        num = num[1:]
+    num := strconv.AppendFloat(f.intbuf[:1], v, byte(verb), prec, size) // TODO 这个方法用来做什么
+    if num[1] == '-' || num[1] == '+' { // 第二个字符是符号
+        num = num[1:] // 取第二个字符及其之后的值
     } else {
-        num[0] = '+'
+        num[0] = '+' // 否则设置第一个字符为+号
     }
+    // f.space表示添加前导空格而不是“+”符号，除非f.plus明确要求使用该符号。
     // f.space means to add a leading space instead of a "+" sign unless
     // the sign is explicitly asked for by f.plus.
     if f.space && num[0] == '+' && !f.plus {
-        num[0] = ' '
+        num[0] = ' ' // 还原成前导0
     }
+    // 对Infinities和NaN的特殊处理，它们看起来不像数字，因此不应用零填充。
     // Special handling for infinities and NaN,
     // which don't look like a number so shouldn't be padded with zeros.
     if num[1] == 'I' || num[1] == 'N' {
         oldZero := f.zero
         f.zero = false
+        // 如果没有要求，删除NaN之前的符号位。
         // Remove sign before NaN if not asked for.
         if num[1] == 'N' && !f.space && !f.plus {
             num = num[1:]
@@ -601,55 +611,60 @@ func (f *fmt) fmtFloat(v float64, size int, verb rune, prec int) {
         f.zero = oldZero
         return
     }
+    // #标志强制为非二进制格式打印小数点，并保留尾随零，我们可能需要将其恢复。
     // The sharp flag forces printing a decimal point for non-binary formats
     // and retains trailing zeros, which we may need to restore.
-    if f.sharp && verb != 'b' {
+    if f.sharp && verb != 'b' { // 有#标记，并且非二进制
         digits := 0
         switch verb {
         case 'v', 'g', 'G', 'x':
             digits = prec
+            // 如果未设置精度，则使用精度6。
             // If no precision is set explicitly use a precision of 6.
             if digits == -1 {
                 digits = 6
             }
         }
-
+        // 预分配缓冲区，并留出足够的空间来存储形式为“e+123”或“p-1023”的指数表示法。
         // Buffer pre-allocated with enough room for
         // exponent notations of the form "e+123" or "p-1023".
         var tailBuf [6]byte
-        tail := tailBuf[:0]
+        tail := tailBuf[:0] // 用于存储小数点后的部分
 
         hasDecimalPoint := false
+        // 从i = 1开始，跳过num[0]处的符号。
         // Starting from i = 1 to skip sign at num[0].
         for i := 1; i < len(num); i++ {
             switch num[i] {
-            case '.':
+            case '.': // 小数点
                 hasDecimalPoint = true
-            case 'p', 'P':
+            case 'p', 'P': // 有P
                 tail = append(tail, num[i:]...)
                 num = num[:i]
-            case 'e', 'E':
-                if verb != 'x' && verb != 'X' {
+            case 'e', 'E':  // 有E
+                if verb != 'x' && verb != 'X' { // 标记中没有X
                     tail = append(tail, num[i:]...)
                     num = num[:i]
                     break
                 }
-                fallthrough
+                fallthrough // 接着向下走
             default:
                 digits--
             }
         }
-        if !hasDecimalPoint {
+        if !hasDecimalPoint { // 有小数点就添加小数点
             num = append(num, '.')
         }
-        for digits > 0 {
+        for digits > 0 { // 还有精度，就添加0
             num = append(num, '0')
             digits--
         }
         num = append(num, tail...)
     }
+    // 如果要求有符号位，或者非正数，就添加符号位
     // We want a sign if asked for and if the sign is not positive.
     if f.plus || num[0] != '+' {
+        // 如果我们向左填充零，我们希望符号在前导零之前。
         // If we're zero padding to the left we want the sign before the leading zeros.
         // Achieve this by writing the sign out and then padding the unsigned number.
         if f.zero && f.widPresent && f.wid > len(num) {
@@ -661,6 +676,7 @@ func (f *fmt) fmtFloat(v float64, size int, verb rune, prec int) {
         f.pad(num)
         return
     }
+    // 不用显示符号位，并且是正数，只输出无符号数
     // No sign to show and the number is positive; just print the unsigned number.
     f.pad(num[1:])
 }
