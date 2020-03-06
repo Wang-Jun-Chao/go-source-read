@@ -266,24 +266,30 @@
 	of strings, and %6.2f will control formatting for each element
 	of a floating-point array.
 
+    但是，在打印类字符串（string-like）动作（%s%q%x%X）的字节片时，将其与字符串等同地视为一个项。
 	However, when printing a byte slice with a string-like verb
 	(%s %q %x %X), it is treated identically to a string, as a single item.
 
+    为了避免可能出现的无穷递归，如：
 	To avoid recursion in cases such as
 		type X string
 		func (x X) String() string { return Sprintf("<%s>", x) }
 	convert the value before recurring:
 		func (x X) String() string { return Sprintf("<%s>", string(x)) }
+	无限递归也可以由自引用数据结构触发，例如包含自身作为元素的切片（如果该类型具有String方法）。但是，这种错误（pathologies）情况很少见，而且软件包也无法防止它们。
 	Infinite recursion can also be triggered by self-referential data
 	structures, such as a slice that contains itself as an element, if
 	that type has a String method. Such pathologies are rare, however,
 	and the package does not protect against them.
 
+    当打印结构体数据之时，fmt无法并且因此不会在未导出的字段上调用诸如Error或String之类的格式化方法。
 	When printing a struct, fmt cannot and therefore does not invoke
 	formatting methods such as Error or String on unexported fields.
 
+    显式指定参数索引：
 	Explicit argument indexes:
 
+    在Printf、Sprintf、Fprintf三个函数中，默认的行为是对每一个格式化verb依次对应调用时成功传递进来的参数。但是，紧跟在verb之前的[n]符号表示应格式化第n个参数（索引从1开始）。同样的在'*'之前的[n]符号表示采用第n个参数的值作为宽度或精度。在处理完方括号表达式[n]后，除非另有指示，会接着处理参数n+1，n+2，...（就是说移动了当前处理位置）。
 	In Printf, Sprintf, and Fprintf, the default behavior is for each
 	formatting verb to format successive arguments passed in the call.
 	However, the notation [n] immediately before the verb indicates that the
@@ -292,20 +298,40 @@
 	the value. After processing a bracketed expression [n], subsequent verbs
 	will use arguments n+1, n+2, etc. unless otherwise directed.
 
+    例如：
 	For example,
 		fmt.Sprintf("%[2]d %[1]d\n", 11, 22)
+	会生成"22 11"，而：
 	will yield "22 11", while
-		fmt.Sprintf("%[3]*.[2]*[1]f", 12.0, 2, 6)
+		fmt.Sprintf("%[3]*.[2]*[1]f", 12.0, 2, 6) // TODO 怎么理解*
+	等价于
 	equivalent to
 		fmt.Sprintf("%6.2f", 12.0)
+	会生成" 12.00"。因为显式的索引会影响随后的verb，这种符号可以通过重设索引用于多次打印同一个值：
 	will yield " 12.00". Because an explicit index affects subsequent verbs,
 	this notation can be used to print the same values multiple times
 	by resetting the index for the first argument to be repeated:
 		fmt.Sprintf("%d %d %#[1]x %#x", 16, 17)
+	会生成"16 17 0x10 0x11"
 	will yield "16 17 0x10 0x11".
 
+    格式化错误：
 	Format errors:
 
+    如果给某个verb提供了非法的参数，如给%d提供了一个字符串，生成的字符串会包含该问题的描述，如下所例：
+        错误的类型或未知的verb：            %!verb(type=value)
+        	Printf("%d", hi):               %!d(string=hi)
+        太多参数（采用索引时会失效）：      %!(EXTRA type=value)
+        	Printf("hi", "guys"):           hi%!(EXTRA string=guys)
+        太少参数:                           %!verb(MISSING)
+        	Printf("hi%d"):                 hi %!d(MISSING)
+        宽度/精度不是整数值：               %!(BADWIDTH) or %!(BADPREC)
+        	Printf("%*s", 4.5, "hi"):       %!(BADWIDTH)hi
+        	Printf("%.*s", 4.5, "hi"):      %!(BADPREC)hi
+        没有索引指向的参数：                %!(BADINDEX)
+        	Printf("%*[2]d", 7):            %!d(BADINDEX)
+        	Printf("%.[2]d", 7):            %!d(BADINDEX)
+    
 	If an invalid argument is given for a verb, such as providing
 	a string to %d, the generated string will contain a
 	description of the problem, as in these examples:
@@ -323,10 +349,14 @@
 			Printf("%*[2]d", 7):       %!d(BADINDEX)
 			Printf("%.[2]d", 7):       %!d(BADINDEX)
 
+    所有的错误都以字符串"%!"开始，有时会后跟单个字符（verb标识符），并以加小括弧的描述结束。
 	All errors begin with the string "%!" followed sometimes
 	by a single character (the verb) and end with a parenthesized
 	description.
 
+    如果被print系列函数调用时，Error或String方法触发了panic，fmt包会根据panic重建错误信息，用一个字符串说明该panic经过了fmt包。例如，一个String方法调用了panic("bad")，生成的格式化信息差不多是这样的：
+        %!s(PANIC=bad)
+    %!s指示表示错误（panic）出现时的使用的verb。
 	If an Error or String method triggers a panic when called by a
 	print routine, the fmt package reformats the error message
 	from the panic, decorating it with an indication that it came
@@ -335,28 +365,35 @@
 	like
 		%!s(PANIC=bad)
 
+    %!s仅显示失败发生时使用的打印动词(the print verb)。如果panic是由错误或String方法的nil接收器导致，则输出的是未修饰的字符串“ <nil>”。
 	The %!s just shows the print verb in use when the failure
 	occurred. If the panic is caused by a nil receiver to an Error
 	or String method, however, the output is the undecorated
 	string, "<nil>".
 
+    扫描
 	Scanning
 
+    一组类似的函数会扫描格式化的文本以产生值。Scan，Scanf和Scanln从os.Stdin中读取值；Fscan，Fscanf和Fscanln从指定的io.Reader读取值；Sscan，Sscanf和Sscanln从参数字符串中读取值。
 	An analogous set of functions scans formatted text to yield
 	values.  Scan, Scanf and Scanln read from os.Stdin; Fscan,
 	Fscanf and Fscanln read from a specified io.Reader; Sscan,
 	Sscanf and Sscanln read from an argument string.
 
+    Scan，Fscan，Sscan将输入中的换行符视为空格。
 	Scan, Fscan, Sscan treat newlines in the input as spaces.
 
+    Scanln、Fscanln、Sscanln会在读取到换行时停止，并要求在这些读取数据之后加上换行符或EOF。
 	Scanln, Fscanln and Sscanln stop scanning at a newline and
 	require that the items be followed by a newline or EOF.
 
+    Scanf，Fscanf和Sscanf根据类似于Printf的格式字符串解析参数。 在下面的文本中，“空格（space）”表示除换行符外的任何Unicode空格字符。
 	Scanf, Fscanf, and Sscanf parse the arguments according to a
 	format string, analogous to that of Printf. In the text that
 	follows, 'space' means any Unicode whitespace character
 	except newline.
 
+    在格式字符串中，由％字符引入的动词消耗并解析输入；这些动词将在下面更详细地描述。格式中除％，空格或换行符以外的其他字符将完全消耗该输入字符，该字符必须存在。 格式字符串中包含零个或多个空格的换行符会在输入中占用零个或多个空格，后跟一个换行符或输入结尾。格式字符串中换行符后的空格在输入中消耗零个或多个空格。否则，格式字符串中任何一个或多个空格的运行都会在输入中消耗尽可能多的空格。除非格式字符串中的空格行与换行符相邻，否则该行必须占用输入中至少一个空格或找到输入的结尾。
 	In the format string, a verb introduced by the % character
 	consumes and parses input; these verbs are described in more
 	detail below. A character other than %, space, or newline in
@@ -371,11 +408,13 @@
 	appears adjacent to a newline, the run must consume at least
 	one space from the input or find the end of the input.
 
+    空格和换行符的处理与C的scanf系列不同：在C中，换行符被视为其他任何空格，并且当格式字符串中的空格运行在输入中找不到要使用的空格时，这绝不是错误。
 	The handling of spaces and newlines differs from that of C's
 	scanf family: in C, newlines are treated as any other space,
 	and it is never an error when a run of spaces in the format
 	string finds no spaces to consume in the input.
 
+    这些动词的行为类似于Printf的行为。例如，%x将扫描一个整数作为十六进制数，%v将扫描默认表示形式的值。未实现Printf动词%p和%T以及标志#和+。对于浮点和复数值，所有有效的格式化动词（%b%e%E%f%F%g%G%x%X和%v）都是等效的，并且接受十进制和十六进制表示法（例如："2.3e+7"，"0x4.5p-8"）和数字分隔的下划线（例如："3.14159_26535_89793"）。
 	The verbs behave analogously to those of Printf.
 	For example, %x will scan an integer as a hexadecimal number,
 	and %v will scan the default representation format for the value.
@@ -385,43 +424,53 @@
 	both decimal and hexadecimal notation (for example: "2.3e+7", "0x4.5p-8")
 	and digit-separating underscores (for example: "3.14159_26535_89793").
 
+    动词处理的输入隐式用空格分隔：除%c外，每个动词的实现都从其余输入中删除前导空格开始，%s动词（和%v读入字符串）在用第一个空格或换行符时停止消费。
 	Input processed by verbs is implicitly space-delimited: the
 	implementation of every verb except %c starts by discarding
 	leading spaces from the remaining input, and the %s verb
 	(and %v reading into a string) stops consuming input at the first
 	space or newline character.
 
+    扫描不带格式或带有％v动词的整数时，接受熟悉的基本设置前缀0b（二进制），0o和0（八进制）和0x（十六进制），以及以数字分隔的下划线。
 	The familiar base-setting prefixes 0b (binary), 0o and 0 (octal),
 	and 0x (hexadecimal) are accepted when scanning integers
 	without a format or with the %v verb, as are digit-separating
 	underscores.
 
+    宽度（width）在输入文本中解释，但是没有用于精确扫描的语法（没有％5.2f，只有％5f）。如果提供了宽度，它将在修剪前导空格后应用，并指定为满足动词而需要阅读的最大字符数。 例如，
 	Width is interpreted in the input text but there is no
 	syntax for scanning with a precision (no %5.2f, just %5f).
 	If width is provided, it applies after leading spaces are
 	trimmed and specifies the maximum number of runes to read
 	to satisfy the verb. For example,
 	   Sscanf(" 1234567 ", "%5s%d", &s, &i)
+	会将s设置为"12345"，将i设置为67
 	will set s to "12345" and i to 67 while
 	   Sscanf(" 12 34 567 ", "%5s%d", &s, &i)
+	将s设置为"12"，将i设置为34。
 	will set s to "12" and i to 34.
 
+    在所有扫描方法中，回车符后紧跟换行符被视为普通换行符（\r\n表示与\n相同）。
 	In all the scanning functions, a carriage return followed
 	immediately by a newline is treated as a plain newline
 	(\r\n means the same as \n).
 
+    在所有扫描功能中，如果操作数实现了Scan方法（即，它实现了Scanner接口），则该方法将用于扫描该操作数的文本。另外，如果扫描的参数数量小于提供的参数数量，则会返回错误。
 	In all the scanning functions, if an operand implements method
 	Scan (that is, it implements the Scanner interface) that
 	method will be used to scan the text for that operand.  Also,
 	if the number of arguments scanned is less than the number of
 	arguments provided, an error is returned.
 
+    所有要扫描的参数都必须是指向Scanner接口的基本类型或实现的指针。
 	All arguments to be scanned must be either pointers to basic
 	types or implementations of the Scanner interface.
 
+    像Scanf和Fscanf一样，Sscanf不需要消耗其全部输入。 无法恢复Sscanf使用了多少输入字符串。
 	Like Scanf and Fscanf, Sscanf need not consume its entire input.
 	There is no way to recover how much of the input string Sscanf used.
 
+    注意：Fscan等可以在返回的输入之后读取一个字符（符文），这意味着调用扫描例程的循环可能会跳过某些输入。仅当输入值之间没有空格时，这通常是一个问题。 如果提供给Fscan的Reader实现了ReadRune，则该方法将用于读取字符。如果Reader还实现了UnreadRune，则将使用该方法保存字符，并且后续调用不会丢失数据。要将ReadRune和UnreadRune方法附加到没有该功能的Reader，请使用bufio.NewReader。
 	Note: Fscan etc. can read one character (rune) past the input
 	they return, which means that a loop calling a scan routine
 	may skip some of the input.  This is usually a problem only
