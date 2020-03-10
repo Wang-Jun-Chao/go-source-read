@@ -242,6 +242,7 @@ type ssave struct {
 	maxWid    int  // width of this arg. // 此arg的宽度
 }
 
+// 此方法不应该被调用
 // The Read method is only in ScanState so that ScanState
 // satisfies io.Reader. It will never be called when used as
 // intended, so there is no need to make it actually work.
@@ -249,31 +250,39 @@ func (s *ss) Read(buf []byte) (n int, err error) {
 	return 0, errors.New("ScanState's Read should not be called. Use ReadRune")
 }
 
+// 从s中读取一个字符
+// @return  r       读取到的字符
+// @return  size    字符表示需要的字节数
+// @return  err     错误信息
 func (s *ss) ReadRune() (r rune, size int, err error) {
-	if s.atEOF || s.count >= s.argLimit {
+	if s.atEOF || s.count >= s.argLimit { // 读取末尾或者超出限制
 		err = io.EOF
 		return
 	}
 
-	r, size, err = s.rs.ReadRune()
-	if err == nil {
+	r, size, err = s.rs.ReadRune() // 读取一个字符
+	if err == nil { // 无错误，字符数计算加一
 		s.count++
-		if s.nlIsEnd && r == '\n' {
-			s.atEOF = true
+		if s.nlIsEnd && r == '\n' { // 换行符是终止符
+			s.atEOF = true // 票房扫描结束
 		}
-	} else if err == io.EOF {
+	} else if err == io.EOF {  // 已经扫描结束
 		s.atEOF = true
 	}
 	return
 }
 
+// 求宽度
+// @return  wid 宽度
+// @return  ok  宽度是否设置
 func (s *ss) Width() (wid int, ok bool) {
-	if s.maxWid == hugeWid {
+	if s.maxWid == hugeWid // hugeWid = 1 << 30
 		return 0, false
 	}
 	return s.maxWid, true
 }
 
+// getRune的公开方法返回错误； 包私有方法返回恐慌。如果getRune达到EOF，则返回值为EOF（-1）。
 // The public method returns an error; this private one panics.
 // If getRune reaches EOF, the return value is EOF (-1).
 func (s *ss) getRune() (r rune) {
@@ -298,6 +307,8 @@ func (s *ss) mustReadRune() (r rune) {
 	return
 }
 
+// 回退
+// @return err 总是nil
 func (s *ss) UnreadRune() error {
 	s.rs.UnreadRune()
 	s.atEOF = false
@@ -305,14 +316,21 @@ func (s *ss) UnreadRune() error {
 	return nil
 }
 
+// 抛出panice
 func (s *ss) error(err error) {
 	panic(scanError{err})
 }
 
+// 抛出panice
 func (s *ss) errorString(err string) {
 	panic(scanError{errors.New(err)})
 }
 
+// 读取一个字符
+// @param   skipSpace   忽略空格
+// @param   f           匹配函数
+// @return  tok         读取到的字符以字节方式存储
+// @return  err         是否有错误
 func (s *ss) Token(skipSpace bool, f func(rune) bool) (tok []byte, err error) {
 	defer func() {
 		if e := recover(); e != nil {
@@ -323,14 +341,15 @@ func (s *ss) Token(skipSpace bool, f func(rune) bool) (tok []byte, err error) {
 			}
 		}
 	}()
-	if f == nil {
-		f = notSpace
+	if f == nil { 
+		f = notSpace // 不忽略空白字符
 	}
 	s.buf = s.buf[:0]
 	tok = s.token(skipSpace, f)
 	return
 }
 
+// space是unicode.White_Space范围的副本，以避免依赖于软件包unicode。
 // space is a copy of the unicode.White_Space ranges,
 // to avoid depending on package unicode.
 var space = [][2]uint16{
@@ -346,6 +365,7 @@ var space = [][2]uint16{
 	{0x3000, 0x3000},
 }
 
+// 判断是否是空白字符
 func isSpace(r rune) bool {
 	if r >= 1<<16 {
 		return false
@@ -362,58 +382,73 @@ func isSpace(r rune) bool {
 	return false
 }
 
+// notSpace是Token方法中使用的默认扫描功能。
 // notSpace is the default scanning function used in Token.
 func notSpace(r rune) bool {
 	return !isSpace(r)
 }
 
+// readRune是一种用于从io.Reader读取UTF-8编码的代码点的结构全。 如果授予scanner的reader尚未实现io.RuneScanner，则使用它。
 // readRune is a structure to enable reading UTF-8 encoded code points
 // from an io.Reader. It is used if the Reader given to the scanner does
 // not already implement io.RuneScanner.
 type readRune struct {
 	reader   io.Reader
-	buf      [utf8.UTFMax]byte // used only inside ReadRune
-	pending  int               // number of bytes in pendBuf; only >0 for bad UTF-8
+	buf      [utf8.UTFMax]byte // used only inside ReadRune // 仅在ReadRune内部使用
+	pending  int               // number of bytes in pendBuf; only >0 for bad UTF-8 // pendBuf中的字节数； 对于错误的UTF-8，仅> 0
 	pendBuf  [utf8.UTFMax]byte // bytes left over
-	peekRune rune              // if >=0 next rune; when <0 is ^(previous Rune)
+	peekRune rune              // if >=0 next rune; when <0 is ^(previous Rune) // 当>=0时，表示下一个字符，当<0时，表示上一个字符的异或
 }
 
+// readByte返回输入的下一个字节，如果UTF-8格式不正确，则该字节可以从上一次读取中保留下来。
+// return b     读取到的字节
+// return err   出错误情况
 // readByte returns the next byte from the input, which may be
 // left over from a previous read if the UTF-8 was ill-formed.
 func (r *readRune) readByte() (b byte, err error) {
-	if r.pending > 0 {
+	if r.pending > 0 { // 如果有pending，就取pendBuf和第一个字节
 		b = r.pendBuf[0]
-		copy(r.pendBuf[0:], r.pendBuf[1:])
+		copy(r.pendBuf[0:], r.pendBuf[1:]) // 字节数组第一个元素之后的值，整体向前移动一个位置
 		r.pending--
 		return
 	}
-	n, err := io.ReadFull(r.reader, r.pendBuf[:1])
-	if n != 1 {
+	n, err := io.ReadFull(r.reader, r.pendBuf[:1]) // 使用io.ReadFull处理pendBuf第一个字节
+	if n != 1 { // 说明处理不成功
 		return 0, err
 	}
 	return r.pendBuf[0], err
 }
 
+// ReadRune从r中的io.Reader返回下一个UTF-8编码的代码点。
+// @return rr   读取到的字符
+// @return size rune的字节数
+// @return err  是否出错
 // ReadRune returns the next UTF-8 encoded code point from the
 // io.Reader inside r.
 func (r *readRune) ReadRune() (rr rune, size int, err error) {
-	if r.peekRune >= 0 {
-		rr = r.peekRune
-		r.peekRune = ^r.peekRune
-		size = utf8.RuneLen(rr)
+	if r.peekRune >= 0 { // 存在下一个字符
+		rr = r.peekRune // 读取
+		r.peekRune = ^r.peekRune // 求异或
+		size = utf8.RuneLen(rr) // 求长度
 		return
 	}
-	r.buf[0], err = r.readByte()
+	
+	// r.peekRune不代表下一个字符
+	r.buf[0], err = r.readByte() // 读取一个字符
 	if err != nil {
 		return
 	}
-	if r.buf[0] < utf8.RuneSelf { // fast check for common ASCII case
+	
+	// 表示单个字节表示的unicode字符
+	if r.buf[0] < utf8.RuneSelf { // fast check for common ASCII case // 快速检查常见ASCII大小写
 		rr = rune(r.buf[0])
 		size = 1 // Known to be 1.
-		// Flip the bits of the rune so it's available to UnreadRune.
+		// Flip the bits of the rune so it's available to UnreadRune. // 翻转符文的各个位，以便UnreadRune可以使用。
 		r.peekRune = ^rr
 		return
 	}
+	
+	// 一个字节，二个字节，...，进行尝试读取字符
 	var n int
 	for n = 1; !utf8.FullRune(r.buf[:n]); n++ {
 		r.buf[n], err = r.readByte()
@@ -425,37 +460,55 @@ func (r *readRune) ReadRune() (rr rune, size int, err error) {
 			return
 		}
 	}
+	
+	// 转成字符
 	rr, size = utf8.DecodeRune(r.buf[:n])
-	if size < n { // an error, save the bytes for the next read
+	if size < n { // an error, save the bytes for the next read // 错误，保存字节供下次读取
 		copy(r.pendBuf[r.pending:], r.buf[size:n])
 		r.pending += n - size
 	}
+	// 翻转符文的各个位，以便UnreadRune可以使用。
 	// Flip the bits of the rune so it's available to UnreadRune.
 	r.peekRune = ^rr
 	return
 }
 
+// 还原一个字符读取
+// @return 是否有错误
 func (r *readRune) UnreadRune() error {
+    // 当时的r.peekRune是有效的，不能还原
 	if r.peekRune >= 0 {
 		return errors.New("fmt: scanning called UnreadRune with no rune available")
 	}
+	
+	// 将先前读取的符文的位反转以获得有效的>=0状态。
 	// Reverse bit flip of previously read rune to obtain valid >=0 state.
 	r.peekRune = ^r.peekRune
 	return nil
 }
 
+// 缓存池，用于创建ss对象
 var ssFree = sync.Pool{
 	New: func() interface{} { return new(ss) },
 }
 
+// newScanState分配一个新的ss结构或获取一个缓存的结构。
+// @param   r           数据源
+// @param   niIsSpace   换行符是否算作空格
+// @param   nlIsEnd     换行符是否终止扫描
+// @return  s           ss类型
+// @return  old         总是返回false
 // newScanState allocates a new ss struct or grab a cached one.
 func newScanState(r io.Reader, nlIsSpace, nlIsEnd bool) (s *ss, old ssave) {
-	s = ssFree.Get().(*ss)
-	if rs, ok := r.(io.RuneScanner); ok {
+	s = ssFree.Get().(*ss) // 从缓存中取值
+	// 如果s是io.RuneScanner类型就是直接赋值给s.rs，否则创建readRune再赋值
+	if rs, ok := r.(io.RuneScanner); ok { 
 		s.rs = rs
 	} else {
 		s.rs = &readRune{reader: r, peekRune: -1}
 	}
+	
+	// 设置初始属性值
 	s.nlIsSpace = nlIsSpace
 	s.nlIsEnd = nlIsEnd
 	s.atEOF = false
@@ -467,35 +520,42 @@ func newScanState(r io.Reader, nlIsSpace, nlIsEnd bool) (s *ss, old ssave) {
 	return
 }
 
+// free将使用过的ss结构保存在ssFree中； 避免每次调用分配。
 // free saves used ss structs in ssFree; avoid an allocation per invocation.
 func (s *ss) free(old ssave) {
+    // 如果以递归方式使用它，则只需恢复旧状态即可。
 	// If it was used recursively, just restore the old state.
 	if old.validSave {
 		s.ssave = old
 		return
 	}
+	
+	// 大缓冲区的ss结构不回收，这么做是为了避免缓冲区占用大量内存
 	// Don't hold on to ss structs with large buffers.
 	if cap(s.buf) > 1024 {
 		return
 	}
+	
+	// 进行数据清理
 	s.buf = s.buf[:0]
 	s.rs = nil
 	ssFree.Put(s)
 }
 
+// SkipSpace使Scan方法能够跳过空格和换行符，以与格式字符串和Scan / Scanln设置的当前扫描模式保持一致。
 // SkipSpace provides Scan methods the ability to skip space and newline
 // characters in keeping with the current scanning mode set by format strings
 // and Scan/Scanln.
 func (s *ss) SkipSpace() {
 	for {
 		r := s.getRune()
-		if r == eof {
+		if r == eof { // 到达末尾
 			return
 		}
-		if r == '\r' && s.peek("\n") {
+		if r == '\r' && s.peek("\n") { // "\r\n"换行
 			continue
 		}
-		if r == '\n' {
+		if r == '\n' { // "换行"
 			if s.nlIsSpace {
 				continue
 			}
@@ -509,14 +569,18 @@ func (s *ss) SkipSpace() {
 	}
 }
 
+// token从输入中返回下一个以空格分隔的字符串。 它跳过空白。 对于Scanln，它在换行符处停止。 对于Scan，换行符被视为空格。
+// @param   skipSpace   忽略空格
+// @param   f           匹配函数
 // token returns the next space-delimited string from the input. It
 // skips white space. For Scanln, it stops at newlines. For Scan,
 // newlines are treated as spaces.
 func (s *ss) token(skipSpace bool, f func(rune) bool) []byte {
-	if skipSpace {
+	if skipSpace { // 忽略空格
 		s.SkipSpace()
 	}
-	// read until white space or newline
+    // 直到读取到了空格或者换行就停止
+	// read until white space or newline 
 	for {
 		r := s.getRune()
 		if r == eof {
@@ -531,9 +595,15 @@ func (s *ss) token(skipSpace bool, f func(rune) bool) []byte {
 	return s.buf
 }
 
+// 复数错误
 var complexError = errors.New("syntax error scanning complex number")
+// bool值错误
 var boolError = errors.New("syntax error scanning boolean")
 
+// 求r在s的中位置，不存在返回-1
+// @param s 字符串
+// @param r 字符
+// return 位置
 func indexRune(s string, r rune) int {
 	for i, c := range s {
 		if c == r {
@@ -543,6 +613,10 @@ func indexRune(s string, r rune) int {
 	return -1
 }
 
+// consume读取输入中的下一个符文，并报告其是否在ok字符串中。 如果accept为true，则将字符放入输入token中。
+// @param ok        输入字符串
+// @param accept    是否接受
+// @return          是否读取
 // consume reads the next rune in the input and reports whether it is in the ok string.
 // If accept is true, it puts the character into the input token.
 func (s *ss) consume(ok string, accept bool) bool {
@@ -556,12 +630,13 @@ func (s *ss) consume(ok string, accept bool) bool {
 		}
 		return true
 	}
-	if r != eof && accept {
+	if r != eof && accept { // 不在字符串中，并且接口，就要还原
 		s.UnreadRune()
 	}
 	return false
 }
 
+// peek报告下一个字符是否在ok字符串中，而不使用它。
 // peek reports whether the next character is in the ok string, without consuming it.
 func (s *ss) peek(ok string) bool {
 	r := s.getRune()
@@ -571,7 +646,9 @@ func (s *ss) peek(ok string) bool {
 	return indexRune(ok, r) >= 0
 }
 
+// 确保没有读取到末尾
 func (s *ss) notEOF() {
+    // 确保有要读取的数据。
 	// Guarantee there is data to be read.
 	if r := s.getRune(); r == eof {
 		panic(io.EOF)
@@ -579,32 +656,43 @@ func (s *ss) notEOF() {
 	s.UnreadRune()
 }
 
+// accept检查输入中的下一个符文。 如果它是字符串中的字节（sic），则将其放入缓冲区并返回true。 否则返回false。
 // accept checks the next rune in the input. If it's a byte (sic) in the string, it puts it in the
 // buffer and returns true. Otherwise it return false.
 func (s *ss) accept(ok string) bool {
 	return s.consume(ok, true)
 }
 
+// okVerb验证该verb动词字符是否存在于okVerbs动词字符串中，如果不存在则适当设置s.err。
+// @param verb 字符
+// @parama okVerbs 字符串
+// @return true：在，false：不在
 // okVerb verifies that the verb is present in the list, setting s.err appropriately if not.
 func (s *ss) okVerb(verb rune, okVerbs, typ string) bool {
-	for _, v := range okVerbs {
+	for _, v := range okVerbs { // 检查动词
 		if v == verb {
 			return true
 		}
 	}
+	
+	// 不在就设置错误
 	s.errorString("bad verb '%" + string(verb) + "' for " + typ)
 	return false
 }
 
+// scanBool返回下一个标记表示的布尔值。
+// @param verb 动词字符
+// @return 
 // scanBool returns the value of the boolean represented by the next token.
 func (s *ss) scanBool(verb rune) bool {
-	s.SkipSpace()
-	s.notEOF()
-	if !s.okVerb(verb, "tv", "boolean") {
+	s.SkipSpace() // 忽略空格
+	s.notEOF()  // 没有处理完
+	if !s.okVerb(verb, "tv", "boolean") { // 动词字符只能是t或者v
 		return false
 	}
+	// 将各种值转换成bool类型
 	// Syntax-checking a boolean is annoying. We're not fastidious about case.
-	switch s.getRune() {
+	switch s.getRune() { // 取一个字符进行转换
 	case '0':
 		return false
 	case '1':
@@ -623,6 +711,7 @@ func (s *ss) scanBool(verb rune) bool {
 	return false
 }
 
+// 各种进制和数学表达式要使用到的字符
 // Numerical elements
 const (
 	binaryDigits      = "01"
@@ -634,10 +723,14 @@ const (
 	exponent          = "eEpP"
 )
 
+// getBase返回由动词及其数字字符串表示的数字基。
+// @param verb 动词
+// @param 动词对应的基数
+// @param 基数使用的字符串
 // getBase returns the numeric base represented by the verb and its digit string.
 func (s *ss) getBase(verb rune) (base int, digits string) {
-	s.okVerb(verb, "bdoUxXv", "integer") // sets s.err
-	base = 10
+	s.okVerb(verb, "bdoUxXv", "integer") // sets s.err // 检视动词，只能接受bdoUxXv类型
+	base = 10 // 默认基数是10
 	digits = decimalDigits
 	switch verb {
 	case 'b':
@@ -653,19 +746,25 @@ func (s *ss) getBase(verb rune) (base int, digits string) {
 	return
 }
 
+// scanNumber返回从此时处理位置开始具有指定数字的数字字符串
+// @param digits 数字字符串
+// @param haveDigits 是否有数字
+// @return 数字字符串
 // scanNumber returns the numerical string with specified digits starting here.
 func (s *ss) scanNumber(digits string, haveDigits bool) string {
-	if !haveDigits {
-		s.notEOF()
-		if !s.accept(digits) {
+	if !haveDigits {// 没有数字
+		s.notEOF() // 未到末尾
+		if !s.accept(digits) { 
 			s.errorString("expected integer")
 		}
 	}
-	for s.accept(digits) {
+	for s.accept(digits) { // 读取字符串，直到不是数字字符
 	}
-	return string(s.buf)
+	return string(s.buf) // 返回数字字符串
 }
 
+// scanRune返回输入中的下一个符文值。以int64方式返回
+// 
 // scanRune returns the next rune value in the input.
 func (s *ss) scanRune(bitSize int) int64 {
 	s.notEOF()
