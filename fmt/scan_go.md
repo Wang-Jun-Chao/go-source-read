@@ -1055,17 +1055,20 @@ func (s *ss) convertString(verb rune) (str string) {
 	case 'x', 'X':
 		str = s.hexString()
 	default:
-		str = string(s.token(true, notSpace)) // %s and %v just return the next word // ％s和％v仅返回下一个单词
+		str = string(s.token(true, notSpace)) // %s and %v just return the next word // %s和%v仅返回下一个单词
 	}
 	return
 }
 
+// quotedString返回由下一个输入字符表示的双引号或反引号字符串。
+// @return 返回下一个输入字符表示的双引号或反引号字符串。
 // quotedString returns the double- or back-quoted string represented by the next input characters.
 func (s *ss) quotedString() string {
 	s.notEOF()
 	quote := s.getRune()
 	switch quote {
 	case '`':
+	    // 反引号：直到EOF或反引号为止。
 		// Back-quoted: Anything goes until EOF or back quote.
 		for {
 			r := s.mustReadRune()
@@ -1076,17 +1079,19 @@ func (s *ss) quotedString() string {
 		}
 		return string(s.buf)
 	case '"':
+	    // 双引号：包括引号并让strconv.Unquote进行反斜杠转义。
 		// Double-quoted: Include the quotes and let strconv.Unquote do the backslash escapes.
 		s.buf.writeByte('"')
 		for {
 			r := s.mustReadRune()
 			s.buf.writeRune(r)
-			if r == '\\' {
+			if r == '\\' { // 遇到"\"再读一个字符
+		        // 在合法的反斜杠转义中，无论字符串多长，仅转义后的字符本身都可以是反斜杠或引号。 因此，我们只需要保护反斜杠后的第一个字符。
 				// In a legal backslash escape, no matter how long, only the character
 				// immediately after the escape can itself be a backslash or quote.
 				// Thus we only need to protect the first character after the backslash.
 				s.buf.writeRune(s.mustReadRune())
-			} else if r == '"' {
+			} else if r == '"' { // 遇到双引号
 				break
 			}
 		}
@@ -1101,6 +1106,10 @@ func (s *ss) quotedString() string {
 	return ""
 }
 
+// hexDigit返回十六进制数字的值。
+// @param d 待处理字符
+// @return int 字符代表的16进制值
+// @return bool 是否处理成功
 // hexDigit returns the value of the hexadecimal digit.
 func hexDigit(d rune) (int, bool) {
 	digit := int(d)
@@ -1115,20 +1124,23 @@ func hexDigit(d rune) (int, bool) {
 	return -1, false
 }
 
+// hexByte返回输入中的下一个十六进制编码（两个字符）的字节。 如果输入中的下一个字节未编码十六进制字节，则返回ok == false。 如果第一个字节是十六进制，第二个字节不是，则处理停止。
+// @return b 下一个十六进制编码（两个字符）的字节。
+// @return ok 是否处理成功
 // hexByte returns the next hex-encoded (two-character) byte from the input.
 // It returns ok==false if the next bytes in the input do not encode a hex byte.
 // If the first byte is hex and the second is not, processing stops.
 func (s *ss) hexByte() (b byte, ok bool) {
 	rune1 := s.getRune()
-	if rune1 == eof {
+	if rune1 == eof { // 已经到最后了，没有下一个字符了
 		return
 	}
-	value1, ok := hexDigit(rune1)
-	if !ok {
+	value1, ok := hexDigit(rune1) // 读取第一个字符
+	if !ok { // 读取出错
 		s.UnreadRune()
 		return
 	}
-	value2, ok := hexDigit(s.mustReadRune())
+	value2, ok := hexDigit(s.mustReadRune()) // 读取第二个字符
 	if !ok {
 		s.errorString("illegal hex digit")
 		return
@@ -1136,11 +1148,13 @@ func (s *ss) hexByte() (b byte, ok bool) {
 	return byte(value1<<4 | value2), true
 }
 
+// hexString返回以空格分隔的十六进制对编码的字符串。
+// @return string 以空格分隔的十六进制对编码的字符串。
 // hexString returns the space-delimited hexpair-encoded string.
 func (s *ss) hexString() string {
 	s.notEOF()
 	for {
-		b, ok := s.hexByte()
+		b, ok := s.hexByte() // TODO 没有看到进行逗号分割？
 		if !ok {
 			break
 		}
@@ -1154,14 +1168,15 @@ func (s *ss) hexString() string {
 }
 
 const (
-	floatVerbs = "beEfFgGv"
+	floatVerbs = "beEfFgGv" // 浮点数动词
 
-	hugeWid = 1 << 30
+	hugeWid = 1 << 30 // 最大宽度
 
-	intBits     = 32 << (^uint(0) >> 63)
-	uintptrBits = 32 << (^uintptr(0) >> 63)
+	intBits     = 32 << (^uint(0) >> 63) // int位数
+	uintptrBits = 32 << (^uintptr(0) >> 63) // 指针位数
 )
 
+// scanPercent扫描文字百分比字符。
 // scanPercent scans a literal percent character.
 func (s *ss) scanPercent() {
 	s.SkipSpace()
@@ -1171,10 +1186,14 @@ func (s *ss) scanPercent() {
 	}
 }
 
+// scanOne扫描单个值，从参数的类型派生扫描器。
+// @param verb 待处理动词
+// @param arg 能够处理动词的Scaner或者类型（必须是指针类型或者指针的反射类型）
 // scanOne scans a single value, deriving the scanner from the type of the argument.
 func (s *ss) scanOne(verb rune, arg interface{}) {
 	s.buf = s.buf[:0]
 	var err error
+	// 如果参数具有自己的Scan方法，请使用该方法。
 	// If the parameter has its own Scan method, use that.
 	if v, ok := arg.(Scanner); ok {
 		err = v.Scan(s, verb)
@@ -1187,6 +1206,7 @@ func (s *ss) scanOne(verb rune, arg interface{}) {
 		return
 	}
 
+    // 针对具体类型进行处理
 	switch v := arg.(type) {
 	case *bool:
 		*v = s.scanBool(verb)
@@ -1216,6 +1236,7 @@ func (s *ss) scanOne(verb rune, arg interface{}) {
 		*v = s.scanUint(verb, 64)
 	case *uintptr:
 		*v = uintptr(s.scanUint(verb, uintptrBits))
+	// 浮点数很棘手，因为您想以结果的精度进行扫描，而不是以高精度进行扫描并进行转换，以便保留正确的错误条件。
 	// Floats are tricky because you want to scan in the precision of the result, not
 	// scan in high precision and convert, in order to preserve the correct error condition.
 	case *float32:
@@ -1233,17 +1254,19 @@ func (s *ss) scanOne(verb rune, arg interface{}) {
 	case *string:
 		*v = s.convertString(verb)
 	case *[]byte:
+	    // 我们扫描到字符串并进行转换，以便获得数据的副本。 如果我们扫描到字节，则切片将指向缓冲区。
 		// We scan to string and convert so we get a copy of the data.
 		// If we scanned to bytes, the slice would point at the buffer.
 		*v = []byte(s.convertString(verb))
 	default:
+	    // 可能是反射类型
 		val := reflect.ValueOf(v)
 		ptr := val
-		if ptr.Kind() != reflect.Ptr {
+		if ptr.Kind() != reflect.Ptr { // 不是指针说明有错误
 			s.errorString("type not a pointer: " + val.Type().String())
 			return
 		}
-		switch v := ptr.Elem(); v.Kind() {
+		switch v := ptr.Elem(); v.Kind() { // 取指针对应的元素类型，进行处理
 		case reflect.Bool:
 			v.SetBool(s.scanBool(verb))
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -1253,6 +1276,7 @@ func (s *ss) scanOne(verb rune, arg interface{}) {
 		case reflect.String:
 			v.SetString(s.convertString(verb))
 		case reflect.Slice:
+		    // 目前，只能处理（重命名）[] byte。
 			// For now, can only handle (renamed) []byte.
 			typ := v.Type()
 			if typ.Elem().Kind() != reflect.Uint8 {
@@ -1275,6 +1299,7 @@ func (s *ss) scanOne(verb rune, arg interface{}) {
 	}
 }
 
+// errorHandler将本地panic情况转变为错误返回。
 // errorHandler turns local panics into error returns.
 func errorHandler(errp *error) {
 	if e := recover(); e != nil {
@@ -1288,21 +1313,26 @@ func errorHandler(errp *error) {
 	}
 }
 
+// doScan无需扫描格式字符串即可进行真正的扫描工作。
+// @param 表求将扫描的结果放入到a的每个元素中
+// @return numProcessed 已经处理的元素个数
+// @return err 是否用错误
 // doScan does the real work for scanning without a format string.
 func (s *ss) doScan(a []interface{}) (numProcessed int, err error) {
 	defer errorHandler(&err)
-	for _, arg := range a {
+	for _, arg := range a { // 对参数的每个值进行处理
 		s.scanOne('v', arg)
 		numProcessed++
 	}
+    // 如果需要，请检查换行符（或EOF）（Scanln等）。
 	// Check for newline (or EOF) if required (Scanln etc.).
-	if s.nlIsEnd {
+	if s.nlIsEnd { // 如果换行符是终止符
 		for {
 			r := s.getRune()
 			if r == '\n' || r == eof {
 				break
 			}
-			if !isSpace(r) {
+			if !isSpace(r) { // 不是空格
 				s.errorString("expected newline")
 				break
 			}
@@ -1311,6 +1341,9 @@ func (s *ss) doScan(a []interface{}) (numProcessed int, err error) {
 	return
 }
 
+// advance确定输入中的下一个字符是否与格式的字符匹配。 它返回格式消耗的字节数（sic）。 输入的或格式字符串中的的所有空格字符行都表现为单个空格。 但是，换行符很特殊：格式中的换行符必须与输入中的换行符匹配，反之亦然。 此例程还处理%%情况。 如果返回值为零，则说明格式字符串以％开头（后面没有％）或输入为空。 如果为负，则输入与字符串不匹配。
+// @param format 格式字符串
+// @return i 处理的字节数
 // advance determines whether the next characters in the input match
 // those of the format. It returns the number of bytes (sic) consumed
 // in the format. All runs of space characters in either input or
@@ -1321,27 +1354,35 @@ func (s *ss) doScan(a []interface{}) (numProcessed int, err error) {
 // is empty. If it is negative, the input did not match the string.
 func (s *ss) advance(format string) (i int) {
 	for i < len(format) {
-		fmtc, w := utf8.DecodeRuneInString(format[i:])
+		fmtc, w := utf8.DecodeRuneInString(format[i:]) // 读取从i位置开始的第一个字符
 
+        // 空格字符处理。
+        // 在此注释的其余部分，“空格”表示换行符以外的空格。
+        // 格式的换行符匹配零个或多个空格的输入，然后匹配换行符或输入的结尾。
+        // 将换行符之前的格式的空格折叠到换行符中。
+        // 换行符后的格式空格与对应的输入换行符后的零个或多个空格匹配。
+        // 格式中的其他空格与一个或多个空格的输入或输入结尾匹配。
 		// Space processing.
 		// In the rest of this comment "space" means spaces other than newline.
 		// Newline in the format matches input of zero or more spaces and then newline or end-of-input.
 		// Spaces in the format before the newline are collapsed into the newline.
 		// Spaces in the format after the newline match zero or more spaces after the corresponding input newline.
 		// Other spaces in the format match input of one or more spaces or end-of-input.
-		if isSpace(fmtc) {
+		if isSpace(fmtc) { // 如果是空白字符
 			newlines := 0
 			trailingSpace := false
 			for isSpace(fmtc) && i < len(format) {
-				if fmtc == '\n' {
-					newlines++
+				if fmtc == '\n' { // 换行
+					newlines++ // 统计换行数
 					trailingSpace = false
 				} else {
 					trailingSpace = true
 				}
-				i += w
-				fmtc, w = utf8.DecodeRuneInString(format[i:])
+				i += w 
+				fmtc, w = utf8.DecodeRuneInString(format[i:]) // 处理下一个字符
 			}
+			
+		    // 对每一行进行处理
 			for j := 0; j < newlines; j++ {
 				inputc := s.getRune()
 				for isSpace(inputc) && inputc != '\n' {
@@ -1351,19 +1392,20 @@ func (s *ss) advance(format string) (i int) {
 					s.errorString("newline in format does not match input")
 				}
 			}
-			if trailingSpace {
+			if trailingSpace { // 消除尾部空格
 				inputc := s.getRune()
-				if newlines == 0 {
+				if newlines == 0 { // 只有一行
+				    // 如果尾的空白是单独的（后面没有跟换行符），则必须找到至少一个能消费的空格。
 					// If the trailing space stood alone (did not follow a newline),
 					// it must find at least one space to consume.
-					if !isSpace(inputc) && inputc != eof {
+					if !isSpace(inputc) && inputc != eof { // 没有到末尾，也没有空格
 						s.errorString("expected space in input to match format")
 					}
-					if inputc == '\n' {
+					if inputc == '\n' { // 包含换行
 						s.errorString("newline in input does not match format")
 					}
 				}
-				for isSpace(inputc) && inputc != '\n' {
+				for isSpace(inputc) && inputc != '\n' { // 有空格，非换行
 					inputc = s.getRune()
 				}
 				if inputc != eof {
@@ -1373,20 +1415,24 @@ func (s *ss) advance(format string) (i int) {
 			continue
 		}
 
+        // 处理动词
 		// Verbs.
 		if fmtc == '%' {
+		    // %不能在末尾
 			// % at end of string is an error.
 			if i+w == len(format) {
 				s.errorString("missing verb: % at end of format string")
 			}
+			// %%处作%
 			// %% acts like a real percent
-			nextc, _ := utf8.DecodeRuneInString(format[i+w:]) // will not match % if string is empty
+			nextc, _ := utf8.DecodeRuneInString(format[i+w:]) // will not match % if string is empty // 如果字符串为空，则不会匹配
 			if nextc != '%' {
 				return
 			}
 			i += w // skip the first %
 		}
-
+        
+        // 匹配字母
 		// Literals.
 		inputc := s.mustReadRune()
 		if fmtc != inputc {
