@@ -764,27 +764,33 @@ func (s *ss) scanNumber(digits string, haveDigits bool) string {
 }
 
 // scanRune返回输入中的下一个符文值。以int64方式返回
-// 
+// @param bitSize 读取的字节数
+// @return 读取到的字符，使用int64返回
 // scanRune returns the next rune value in the input.
 func (s *ss) scanRune(bitSize int) int64 {
 	s.notEOF()
-	r := int64(s.getRune())
+	r := int64(s.getRune()) // 读取一个字符
 	n := uint(bitSize)
-	x := (r << (64 - n)) >> (64 - n)
+	x := (r << (64 - n)) >> (64 - n) // TODO
 	if x != r {
 		s.errorString("overflow on character value " + string(r))
 	}
 	return r
 }
 
+// scanBasePrefix报告整数是否以基数前缀开头并返回基数，数字字符串，以及是否找到零。 仅当动词为%v时才被调用。
+// @return base 数字基数
+// @return digits 基数数字字符串
+// @return zeroFound 是否找到0
 // scanBasePrefix reports whether the integer begins with a base prefix
 // and returns the base, digit string, and whether a zero was found.
 // It is called only if the verb is %v.
 func (s *ss) scanBasePrefix() (base int, digits string, zeroFound bool) {
-	if !s.peek("0") {
-		return 0, decimalDigits + "_", false
+	if !s.peek("0") { // 当前位置非0开头，说明
+		return 0, decimalDigits + "_", false 
 	}
-	s.accept("0")
+	s.accept("0") // 消费0
+	// 处理各种进制
 	// Special cases for 0, 0b, 0o, 0x.
 	switch {
 	case s.peek("bB"):
@@ -796,31 +802,38 @@ func (s *ss) scanBasePrefix() (base int, digits string, zeroFound bool) {
 	case s.peek("xX"):
 		s.consume("xX", true)
 		return 0, hexadecimalDigits + "_", true
-	default:
+	default: // 默认8进制
 		return 0, octalDigits + "_", true
 	}
 }
 
+// scanInt返回下一个标记表示的整数值，检查是否溢出。 任何错误都存储在s.err中。
+// @param verb 动词
+// @param bbitSize 读取的位数
+// @return 读取到的数值
 // scanInt returns the value of the integer represented by the next
 // token, checking for overflow. Any error is stored in s.err.
 func (s *ss) scanInt(verb rune, bitSize int) int64 {
-	if verb == 'c' {
+	if verb == 'c' { // 如果c动词就读取指定位数
 		return s.scanRune(bitSize)
 	}
+	
+	// 忽略空格并检测是否到文末
 	s.SkipSpace()
 	s.notEOF()
-	base, digits := s.getBase(verb)
+	base, digits := s.getBase(verb) // 取base和base字符串
 	haveDigits := false
-	if verb == 'U' {
-		if !s.consume("U", false) || !s.consume("+", false) {
+	if verb == 'U' { // U动词
+		if !s.consume("U", false) || !s.consume("+", false) { // "U+"消费出错，设置错误
 			s.errorString("bad unicode format ")
 		}
 	} else {
-		s.accept(sign) // If there's a sign, it will be left in the token buffer.
-		if verb == 'v' {
-			base, digits, haveDigits = s.scanBasePrefix()
+		s.accept(sign) // If there's a sign, it will be left in the token buffer.// 如果有符号，它将保留在Token缓冲区中。
+		if verb == 'v' { // v动词
+			base, digits, haveDigits = s.scanBasePrefix() // 处理前进制的前缀
 		}
 	}
+	// 处理数字
 	tok := s.scanNumber(digits, haveDigits)
 	i, err := strconv.ParseInt(tok, base, 64)
 	if err != nil {
@@ -834,6 +847,10 @@ func (s *ss) scanInt(verb rune, bitSize int) int64 {
 	return i
 }
 
+// scanUint返回下一个标记表示的无符号整数的值，以检查是否溢出。 任何错误都存储在s.err中。
+// @param verb 动词
+// @param bbitSize 读取的位数
+// @return 读取到的数值
 // scanUint returns the value of the unsigned integer represented
 // by the next token, checking for overflow. Any error is stored in s.err.
 func (s *ss) scanUint(verb rune, bitSize int) uint64 {
@@ -864,40 +881,53 @@ func (s *ss) scanUint(verb rune, bitSize int) uint64 {
 	return i
 }
 
+// floatToken返回从此处开始的浮点数，如果指定了宽度，则不超过swid。它对语法并不严格，因为它不会检查我们是否至少有一些数字，但是Atof会做到这一点。
 // floatToken returns the floating-point number starting here, no longer than swid
 // if the width is specified. It's not rigorous about syntax because it doesn't check that
 // we have at least some digits, but Atof will do that.
 func (s *ss) floatToken() string {
 	s.buf = s.buf[:0]
+	// 非数字处理
 	// NaN?
 	if s.accept("nN") && s.accept("aA") && s.accept("nN") {
 		return string(s.buf)
 	}
+	// 有符号位
 	// leading sign?
 	s.accept(sign)
+	// 无穷数
 	// Inf?
 	if s.accept("iI") && s.accept("nN") && s.accept("fF") {
 		return string(s.buf)
 	}
+	
+	// 10进制，数字和_
 	digits := decimalDigits + "_"
 	exp := exponent
-	if s.accept("0") && s.accept("xX") {
+	if s.accept("0") && s.accept("xX") { // 16进制
 		digits = hexadecimalDigits + "_"
-		exp = "pP"
+		exp = "pP" // 指数
 	}
+	
+	// 处理系数的整数部分（a*10^b），a是系数，10是底数，b是指数
 	// digits?
 	for s.accept(digits) {
 	}
+	// 处理小数点
 	// decimal point?
 	if s.accept(period) {
+	    // 处理小数部分
 		// fraction?
 		for s.accept(digits) {
 		}
 	}
+	// 处理指数部分
 	// exponent?
 	if s.accept(exp) {
+	    // 处理指数符号位
 		// leading sign?
 		s.accept(sign)
+		// 处理指数值
 		// digits?
 		for s.accept(decimalDigits + "_") {
 		}
@@ -905,6 +935,9 @@ func (s *ss) floatToken() string {
 	return string(s.buf)
 }
 
+// complexTokens返回从此处开始的复数的实部和虚部。数字可能带有括号并具有（N + Ni）格式，其中N是浮点数并且其中没有空格。
+// return real 实部字符串
+// return imag 虚部字符串
 // complexTokens returns the real and imaginary parts of the complex number starting here.
 // The number might be parenthesized and has the format (N+Ni) where N is a floating-point
 // number and there are no spaces within.
@@ -913,22 +946,25 @@ func (s *ss) complexTokens() (real, imag string) {
 	parens := s.accept("(")
 	real = s.floatToken()
 	s.buf = s.buf[:0]
+	// 必须要有符号位
 	// Must now have a sign.
 	if !s.accept("+-") {
 		s.error(complexError)
 	}
+	// 虚部符号
 	// Sign is now in buffer
 	imagSign := string(s.buf)
 	imag = s.floatToken()
-	if !s.accept("i") {
+	if !s.accept("i") { // 虚部标识
 		s.error(complexError)
 	}
-	if parens && !s.accept(")") {
+	if parens && !s.accept(")") { // 最后处理括号
 		s.error(complexError)
 	}
 	return real, imagSign + imag
 }
 
+// 字符串中是否包含x不分大小写
 func hasX(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] == 'x' || s[i] == 'X' {
@@ -938,32 +974,42 @@ func hasX(s string) bool {
 	return false
 }
 
+// convertFloat将字符串转换为float64值。
+// @param str 数字字符串
+// @param n 基数
+// @param n 浮点值
 // convertFloat converts the string to a float64value.
 func (s *ss) convertFloat(str string, n int) float64 {
+    // strconv.ParseFloat将处理"+0x1.fp+2"，但是我们必须自己实现非标准的十进制+二进制指数混合（1.2p4）。
 	// strconv.ParseFloat will handle "+0x1.fp+2",
 	// but we have to implement our non-standard
 	// decimal+binary exponent mix (1.2p4) ourselves.
-	if p := indexRune(str, 'p'); p >= 0 && !hasX(str) {
+	if p := indexRune(str, 'p'); p >= 0 && !hasX(str) { // 字符串中有p并且有x
+	    //Atof不处理2的幂的指数，但它们很容易评估。
 		// Atof doesn't handle power-of-2 exponents,
 		// but they're easy to evaluate.
-		f, err := strconv.ParseFloat(str[:p], n)
+		f, err := strconv.ParseFloat(str[:p], n) // 使用指定基本数进行处理
 		if err != nil {
+		    // 如果有错误，并且是*strconv.NumError类型，就将待处理的字符串保存到错误中
 			// Put full string into error.
 			if e, ok := err.(*strconv.NumError); ok {
 				e.Num = str
 			}
 			s.error(err)
 		}
-		m, err := strconv.Atoi(str[p+1:])
-		if err != nil {
+		m, err := strconv.Atoi(str[p+1:]) // 使用10进制再次处理
+		if err != nil { // 出错
 			// Put full string into error.
 			if e, ok := err.(*strconv.NumError); ok {
 				e.Num = str
 			}
 			s.error(err)
 		}
+		
+		// 最后使用数学库进行处理
 		return math.Ldexp(f, m)
 	}
+
 	f, err := strconv.ParseFloat(str, n)
 	if err != nil {
 		s.error(err)
@@ -971,11 +1017,16 @@ func (s *ss) convertFloat(str string, n int) float64 {
 	return f
 }
 
+// convertComplex将下一个标记转换为complex128值。 atof参数是基础类型的特定于类型的读取器。如果我们正在阅读complex64，则atof将解析float32，并将其转换为float64，以避免为每种复杂类型重现此代码。
+// @param verb 动词字符
+// @parma n 基数
+// return 位数，64或者128
 // convertComplex converts the next token to a complex128 value.
 // The atof argument is a type-specific reader for the underlying type.
 // If we're reading complex64, atof will parse float32s and convert them
 // to float64's to avoid reproducing this code for each complex type.
 func (s *ss) scanComplex(verb rune, n int) complex128 {
+    // 如果不是浮点数，直接返回
 	if !s.okVerb(verb, floatVerbs, "complex") {
 		return 0
 	}
@@ -987,21 +1038,24 @@ func (s *ss) scanComplex(verb rune, n int) complex128 {
 	return complex(real, imag)
 }
 
+// convertString返回下一个输入字符表示的字符串。 输入的格式由动词确定。
+// @param verb 格式动词
+// @return 格式化后的字符串
 // convertString returns the string represented by the next input characters.
 // The format of the input is determined by the verb.
 func (s *ss) convertString(verb rune) (str string) {
-	if !s.okVerb(verb, "svqxX", "string") {
+	if !s.okVerb(verb, "svqxX", "string") { // 检察动词是否合法，不合法直接返回
 		return ""
 	}
 	s.SkipSpace()
 	s.notEOF()
 	switch verb {
-	case 'q':
+	case 'q': 
 		str = s.quotedString()
 	case 'x', 'X':
 		str = s.hexString()
 	default:
-		str = string(s.token(true, notSpace)) // %s and %v just return the next word
+		str = string(s.token(true, notSpace)) // %s and %v just return the next word // ％s和％v仅返回下一个单词
 	}
 	return
 }
