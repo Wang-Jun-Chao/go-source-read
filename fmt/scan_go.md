@@ -1444,52 +1444,62 @@ func (s *ss) advance(format string) (i int) {
 	return
 }
 
+// 使用格式字符串进行扫描时，doScanf可以完成真正的工作。目前，它仅处理指向基本类型的指针。
+// @param format 格式化字符串
+// @param a 操作数
+// @param numProcessed 处理的a中的元素个数
+// @return err 是否有错误
 // doScanf does the real work when scanning with a format string.
 // At the moment, it handles only pointers to basic types.
 func (s *ss) doScanf(format string, a []interface{}) (numProcessed int, err error) {
 	defer errorHandler(&err)
 	end := len(format) - 1
+	// 我们会以非平凡的格式处理一项
 	// We process one item per non-trivial format
 	for i := 0; i <= end; {
-		w := s.advance(format[i:])
+		w := s.advance(format[i:]) // 处理有效就一直处理
 		if w > 0 {
 			i += w
 			continue
 		}
+		// 我们要么没有前进，要么我们有一个百分号，要么我们处理完了输入。
 		// Either we failed to advance, we have a percent character, or we ran out of input.
-		if format[i] != '%' {
+		if format[i] != '%' { // 不是百分号
+		    // 格式有错
 			// Can't advance format. Why not?
 			if w < 0 {
 				s.errorString("input does not match format")
 			}
+			// 否则在EOF； 下面处理“操作数太多”错误
 			// Otherwise at EOF; "too many operands" error handled below
 			break
 		}
-		i++ // % is one byte
+		i++ // % is one byte // 跳过%
 
+        // 我们有20个字节？（宽度）吗？
 		// do we have 20 (width)?
 		var widPresent bool
-		s.maxWid, widPresent, i = parsenum(format, i, end)
-		if !widPresent {
+		s.maxWid, widPresent, i = parsenum(format, i, end) // 处理数字
+		if !widPresent { // 宽度不存在就设置最大宽度
 			s.maxWid = hugeWid
 		}
 
-		c, w := utf8.DecodeRuneInString(format[i:])
+		c, w := utf8.DecodeRuneInString(format[i:]) // 字符串解析成字符
 		i += w
 
-		if c != 'c' {
+		if c != 'c' { // 不是c字符，忽略空格
 			s.SkipSpace()
 		}
-		if c == '%' {
+		if c == '%' { // 是%号就处理百分号
 			s.scanPercent()
-			continue // Do not consume an argument.
+			continue // Do not consume an argument. // 不要消耗参数。
 		}
-		s.argLimit = s.limit
+		s.argLimit = s.limit // 设置参数的最大值
 		if f := s.count + s.maxWid; f < s.argLimit {
 			s.argLimit = f
 		}
 
-		if numProcessed >= len(a) { // out of operands
+		if numProcessed >= len(a) { // out of operands // 操作数不足
 			s.errorString("too few operands for format '%" + format[i-w:] + "'")
 			break
 		}
@@ -1499,7 +1509,7 @@ func (s *ss) doScanf(format string, a []interface{}) (numProcessed int, err erro
 		numProcessed++
 		s.argLimit = s.limit
 	}
-	if numProcessed < len(a) {
+	if numProcessed < len(a) { // 操作数过多
 		s.errorString("too many operands")
 	}
 	return
