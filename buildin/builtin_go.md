@@ -1,360 +1,311 @@
-
 ```go
 
-// builtin 包为Go的预声明标识符提供了文档. 此处列出的条目其实并不在 buildin 包中，对它们的描述只是为了让 godoc 给该语言的特殊标识符提供文档。
+/
 /*
-	Package builtin provides documentation for Go's predeclared identifiers.
-	The items documented here are not actually in package builtin
-	but their descriptions here allow godoc to present documentation
-	for the language's special identifiers.
+    unsafe 包含有关于Go程序类型安全的所有操作。
+	Package unsafe contains operations that step around the type safety of Go programs.
+
+    导入不安全的软件包可能是不可移植的，并且不受Go 1兼容性准则的保护。
+	Packages that import unsafe may be non-portable and are not protected by the
+	Go 1 compatibility guidelines.
 */
-package builtin
+package unsafe
 
-// bool 是布尔值的集合，即 true 和 false。
-// bool is the set of boolean values, true and false.
-type bool bool
+// ArbitraryType此处仅出于文档目的，实际上并不是不安全软件包的一部分。 它表示任意Go表达式的类型。
+// ArbitraryType is here for the purposes of documentation only and is not actually
+// part of the unsafe package. It represents the type of an arbitrary Go expression.
+type ArbitraryType int
 
-// true 和 false 是两个无类型布尔值。
-// true and false are the two untyped boolean values.
-const (
-	true  = 0 == 0 // Untyped bool.
-	false = 0 != 0 // Untyped bool.
-)
+// Pointer 代表一个指向任意类型的指针。
+// 有四种特殊的操作可用于类型指针而不能用于其它类型。
+//	1) 任意类型的指针值均可转换为 Pointer。
+//	2) Pointer 均可转换为任意类型的指针值。
+//	3) uintptr 均可转换为 Pointer。
+//	4) Pointer 均可转换为 uintptr。
+// 因此 Pointer 允许程序击溃类型系统并读写任意内存。它应当被用得非常小心。
+//
+// 以下涉及Pointer的模式是有效的。 不使用这些模式的代码今天可能无效，或者将来可能无效。 甚至下面的有效模式也带有重要的警告。
+//
+// 运行“ go vet”可以帮助查找不符合这些模式的Pointer用法，但是对“go vet”的静默模式并不能保证代码有效。
+// 
+// （1）将* T1转换为指向* T2的指针。
+// 如果T2不大于T1，并且两个共享相同的内存布局，则此转换允许将一种类型的数据重新解释为另一种类型的数据。 一个示例是math.Float64bits的实现：
+//	func Float64bits(f float64) uint64 {
+//		return *(*uint64)(unsafe.Pointer(&f))
+//	}
+//
+// （2）将Pointer转换为uintptr（但不返回给Pointer）。
+// 
+// 将Pointer转换为uintptr会生成指向整数的指针的内存地址。这种uintptr的通常用法是打印它。
+// 将uintptr转换回Pointer通常是无效的。
+// uintptr是整数，不是引用。将Pointer转换为uintptr会创建一个没有指针语义的整数值。
+// 即使uintptr拥有某个对象的地址，垃圾回收器也不会在对象移动时更新该uintptr的值，也不会使uintptr阻止回收该对象。
+// 其余模式列举从uintptr到Pointer的唯一有效转换。
+//
+//（3）使用算术将指针转换为uintptr并返回。
+//
+// 如果p指向已分配的对象，则可以通过转换为uintptr，添加偏移量并将其转换回Pointer的方式将其推进对象。
+// p = unsafe.Pointer(uintptr(p) + offset)
+// 此模式最常见的用法是访问结构中的元素，或者数组中的字段：
+// // 等效于 f := unsafe.Pointer(&s.f)
+// f := unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Offsetof(s.f))
+// // 等效于 e := unsafe.Pointer(&x[i])
+// e := unsafe.Pointer(uintptr(unsafe.Pointer(&x[0])) + i*unsafe.Sizeof(x[0]))
+// 以这种方式从指针添加和减去偏移量都是有效的。通常使用＆^舍入指针（通常用于对齐）也是有效的。在所有情况下，结果都必须继续指向原始分配的对象。
+// 与C语言不同，将指针好超出其原始分配的末尾是无效的：
+// 
+// // INVALID：结束指针在分配的空间之外。
+// var s thing
+// end = unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Sizeof(s))
+// 
+// // INVALID：结束指针在分配的空间之外。
+// b := make([]byte, n)
+// end = unsafe.Pointer(uintptr(unsafe.Pointer(&b[0])) + uintptr(n))
+//
+// 请注意，两个转换必须出现在同一表达式中，并且它们之间只有中间的算术运算：
+// //INVALID：uintptr在转换回Pointer之前不能存储在变量中。
+// u := uintptr(p)
+// p = unsafe.Pointer(u+offset)
+//
+// 注意，指针必须指向已分配的对象，因此它不能为nil。
+// // 无效：nil指针的转换
+// u := unsafe.Pointer(nil)
+// p := unsafe.Pointer(uintptr(u) + offset)
+//
+//（4）调用syscall.Syscall时将指针转换为uintptr。
+//
+// 软件包syscall中的Syscall函数将其uintptr参数直接传递给操作系统，然后，操作系统可以根据调用的详细信息将其中一些参数重新解释为指针。也就是说，系统调用实现正在将某些参数从uintptr隐式转换回指针。
+// 如果必须将指针参数转换为uintptr用作参数，则该转换必须出现在调用表达式本身中：
+// syscall.Syscall(SYS_READ, uintptr(fd), uintptr(unsafe.Pointer(p)), uintptr(n))
+// 编译器通过安排引用的已分配对象，处理在汇编中实现的函数的调用的参数列表中转换为uintptr的Pointer，
+// 如果有的话，对象会保留，并且直到调用完成才移动，即使仅从类型来看，在调用过程中似乎不再需要该对象。 // TODO 英文本身句法复杂，翻译不准备
+// 
+// 为了使编译器能够识别这种模式，转换必须出现在参数列表中：
+// //无效：在系统调用期间隐式转换回Pointer之前，不能将uintptr存储在变量中。
+// u := uintptr(unsafe.Pointer(p))
+// syscall.Syscall(SYS_READ, uintptr(fd), u, uintptr(n))
+//
+// （5）将reflect.Value.Pointer或reflect.Value.UnsafeAddr的结果从uintptr转换为Pointer。
+// 包reflect的Value结构的名为Pointer和UnsafeAddr方法返回uintptr类型而不是不安全类型。Pointer可防止调用者将结果更改为任意类型，而无需先导入“不安全”。但是，这意味着结果很脆弱，必须在调用后立即使用相同的表达式将其转换为Pointer：
+// p := (*int)(unsafe.Pointer(reflect.ValueOf(new(int)).Pointer()))
+//
+// 与上述情况一样，在转换之前存储结果无效：
+// //无效：uintptr在转换回Pointer之前不能存储在变量中。
+// u := reflect.ValueOf(new(int)).Pointer()
+// p := (*int)(unsafe.Pointer(u))
+//
+// （6）将reflect.SliceHeader或reflect.StringHeader数据字段与指针进行转换。
+// 与前面的情况一样，反射数据结构SliceHeader和StringHeader将字段Data声明为uintptr，以防止调用者将结果更改为任意类型，而无需首先导入“ unsafe”。但是，这意味着SliceHeader和StringHeader仅在解释实际切片或字符串值的内容时才有效。
+// var s string
+// hdr := (*reflect.StringHeader)(unsafe.Pointer(&s)) // 情况 1
+// hdr.Data = uintptr(unsafe.Pointer(p))              // 情况 6 (当前情况)
+// hdr.Len = n
+//
+// 在这种用法中，hdr.Data实际上是在字符串header中引用基础指针的替代方法，而不是uintptr变量本身。
+// 通常，reflect.SliceHeader和reflect.StringHeader只能用作指向实际切片或字符串的*reflect.SliceHeader和*reflect.StringHeader，而不能用作纯结构。程序不应声明或分配这些结构类型的变量。
+// 
+// // INVALID：直接声明的标头将不保存Data作为引用。
+// var hdr reflect.StringHeader
+// hdr.Data = uintptr(unsafe.Pointer(p))
+// hdr.Len = n
+// s := *(*string)(unsafe.Pointer(&hdr)) // p可能已经丢失
 
-// uint8 是所有无符号8位整数的集合。 范围：0 至 255
-// uint8 is the set of all unsigned 8-bit integers.
-// Range: 0 through 255.
-type uint8 uint8
+// Pointer represents a pointer to an arbitrary type. There are four special operations
+// available for type Pointer that are not available for other types:
+//	- A pointer value of any type can be converted to a Pointer.
+//	- A Pointer can be converted to a pointer value of any type.
+//	- A uintptr can be converted to a Pointer.
+//	- A Pointer can be converted to a uintptr.
+// Pointer therefore allows a program to defeat the type system and read and write
+// arbitrary memory. It should be used with extreme care.
+//
+// The following patterns involving Pointer are valid.
+// Code not using these patterns is likely to be invalid today
+// or to become invalid in the future.
+// Even the valid patterns below come with important caveats.
+//
+// Running "go vet" can help find uses of Pointer that do not conform to these patterns,
+// but silence from "go vet" is not a guarantee that the code is valid.
+//
+// (1) Conversion of a *T1 to Pointer to *T2.
+//
+// Provided that T2 is no larger than T1 and that the two share an equivalent
+// memory layout, this conversion allows reinterpreting data of one type as
+// data of another type. An example is the implementation of
+// math.Float64bits:
+//
+//	func Float64bits(f float64) uint64 {
+//		return *(*uint64)(unsafe.Pointer(&f))
+//	}
+//
+// (2) Conversion of a Pointer to a uintptr (but not back to Pointer).
+//
+// Converting a Pointer to a uintptr produces the memory address of the value
+// pointed at, as an integer. The usual use for such a uintptr is to print it.
+//
+// Conversion of a uintptr back to Pointer is not valid in general.
+//
+// A uintptr is an integer, not a reference.
+// Converting a Pointer to a uintptr creates an integer value
+// with no pointer semantics.
+// Even if a uintptr holds the address of some object,
+// the garbage collector will not update that uintptr's value
+// if the object moves, nor will that uintptr keep the object
+// from being reclaimed.
+//
+// The remaining patterns enumerate the only valid conversions
+// from uintptr to Pointer.
+//
+// (3) Conversion of a Pointer to a uintptr and back, with arithmetic.
+//
+// If p points into an allocated object, it can be advanced through the object
+// by conversion to uintptr, addition of an offset, and conversion back to Pointer.
+//
+//	p = unsafe.Pointer(uintptr(p) + offset)
+//
+// The most common use of this pattern is to access fields in a struct
+// or elements of an array:
+//
+//	// equivalent to f := unsafe.Pointer(&s.f)
+//	f := unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Offsetof(s.f))
+//
+//	// equivalent to e := unsafe.Pointer(&x[i])
+//	e := unsafe.Pointer(uintptr(unsafe.Pointer(&x[0])) + i*unsafe.Sizeof(x[0]))
+//
+// It is valid both to add and to subtract offsets from a pointer in this way.
+// It is also valid to use &^ to round pointers, usually for alignment.
+// In all cases, the result must continue to point into the original allocated object.
+//
+// Unlike in C, it is not valid to advance a pointer just beyond the end of
+// its original allocation:
+//
+//	// INVALID: end points outside allocated space.
+//	var s thing
+//	end = unsafe.Pointer(uintptr(unsafe.Pointer(&s)) + unsafe.Sizeof(s))
+//
+//	// INVALID: end points outside allocated space.
+//	b := make([]byte, n)
+//	end = unsafe.Pointer(uintptr(unsafe.Pointer(&b[0])) + uintptr(n))
+//
+// Note that both conversions must appear in the same expression, with only
+// the intervening arithmetic between them:
+//
+//	// INVALID: uintptr cannot be stored in variable
+//	// before conversion back to Pointer.
+//	u := uintptr(p)
+//	p = unsafe.Pointer(u + offset)
+//
+// Note that the pointer must point into an allocated object, so it may not be nil.
+//
+//	// INVALID: conversion of nil pointer
+//	u := unsafe.Pointer(nil)
+//	p := unsafe.Pointer(uintptr(u) + offset)
+//
+// (4) Conversion of a Pointer to a uintptr when calling syscall.Syscall.
+//
+// The Syscall functions in package syscall pass their uintptr arguments directly
+// to the operating system, which then may, depending on the details of the call,
+// reinterpret some of them as pointers.
+// That is, the system call implementation is implicitly converting certain arguments
+// back from uintptr to pointer.
+//
+// If a pointer argument must be converted to uintptr for use as an argument,
+// that conversion must appear in the call expression itself:
+//
+//	syscall.Syscall(SYS_READ, uintptr(fd), uintptr(unsafe.Pointer(p)), uintptr(n))
+//
+// The compiler handles a Pointer converted to a uintptr in the argument list of
+// a call to a function implemented in assembly by arranging that the referenced
+// allocated object, if any, is retained and not moved until the call completes,
+// even though from the types alone it would appear that the object is no longer
+// needed during the call.
+//
+// For the compiler to recognize this pattern,
+// the conversion must appear in the argument list:
+//
+//	// INVALID: uintptr cannot be stored in variable
+//	// before implicit conversion back to Pointer during system call.
+//	u := uintptr(unsafe.Pointer(p))
+//	syscall.Syscall(SYS_READ, uintptr(fd), u, uintptr(n))
+//
+// (5) Conversion of the result of reflect.Value.Pointer or reflect.Value.UnsafeAddr
+// from uintptr to Pointer.
+//
+// Package reflect's Value methods named Pointer and UnsafeAddr return type uintptr
+// instead of unsafe.Pointer to keep callers from changing the result to an arbitrary
+// type without first importing "unsafe". However, this means that the result is
+// fragile and must be converted to Pointer immediately after making the call,
+// in the same expression:
+//
+//	p := (*int)(unsafe.Pointer(reflect.ValueOf(new(int)).Pointer()))
+//
+// As in the cases above, it is invalid to store the result before the conversion:
+//
+//	// INVALID: uintptr cannot be stored in variable
+//	// before conversion back to Pointer.
+//	u := reflect.ValueOf(new(int)).Pointer()
+//	p := (*int)(unsafe.Pointer(u))
+//
+// (6) Conversion of a reflect.SliceHeader or reflect.StringHeader Data field to or from Pointer.
+//
+// As in the previous case, the reflect data structures SliceHeader and StringHeader
+// declare the field Data as a uintptr to keep callers from changing the result to
+// an arbitrary type without first importing "unsafe". However, this means that
+// SliceHeader and StringHeader are only valid when interpreting the content
+// of an actual slice or string value.
+//
+//	var s string
+//	hdr := (*reflect.StringHeader)(unsafe.Pointer(&s)) // case 1
+//	hdr.Data = uintptr(unsafe.Pointer(p))              // case 6 (this case)
+//	hdr.Len = n
+//
+// In this usage hdr.Data is really an alternate way to refer to the underlying
+// pointer in the string header, not a uintptr variable itself.
+//
+// In general, reflect.SliceHeader and reflect.StringHeader should be used
+// only as *reflect.SliceHeader and *reflect.StringHeader pointing at actual
+// slices or strings, never as plain structs.
+// A program should not declare or allocate variables of these struct types.
+//
+//	// INVALID: a directly-declared header will not hold Data as a reference.
+//	var hdr reflect.StringHeader
+//	hdr.Data = uintptr(unsafe.Pointer(p))
+//	hdr.Len = n
+//	s := *(*string)(unsafe.Pointer(&hdr)) // p possibly already lost
+//
+type Pointer *ArbitraryType
 
-// uint16 是所有无符号16位整数的集合。范围：0 至 65535。
-// uint16 is the set of all unsigned 16-bit integers.
-// Range: 0 through 65535.
-type uint16 uint16
+// Sizeof接受任何类型的表达式x并返回假设变量v的字节大小，就好像v是通过var v = x声明的一样。
+该大小不包括x可能引用的任何内存。
+例如，如果x是切片，则Sizeof返回切片描述符的大小，而不是该切片所引用的内存的大小。 Sizeof的返回值是Go常数。
+// Sizeof takes an expression x of any type and returns the size in bytes
+// of a hypothetical variable v as if v was declared via var v = x.
+// The size does not include any memory possibly referenced by x.
+// For instance, if x is a slice, Sizeof returns the size of the slice
+// descriptor, not the size of the memory referenced by the slice.
+// The return value of Sizeof is a Go constant.
+func Sizeof(x ArbitraryType) uintptr
 
-// uint32 是所有无符号32位整数的集合。范围：0 至 4294967295。
-// uint32 is the set of all unsigned 32-bit integers.
-// Range: 0 through 4294967295.
-type uint32 uint32
+// Offsetof返回x表示的结构内的字段偏移量，该偏移量的格式必须为structValue.field。 换句话说，它返回结构开始与字段开始之间的字节数。 Offsetof的返回值为Go常数。
+// Offsetof returns the offset within the struct of the field represented by x,
+// which must be of the form structValue.field. In other words, it returns the
+// number of bytes between the start of the struct and the start of the field.
+// The return value of Offsetof is a Go constant.
+func Offsetof(x ArbitraryType) uintptr
 
-// uint64 是所有无符号64位整数的集合。范围：0 至 18446744073709551615。
-// uint64 is the set of all unsigned 64-bit integers.
-// Range: 0 through 18446744073709551615.
-type uint64 uint64
-
-// int8 是所有带符号8位整数的集合。 范围：-128 至 127。
-// int8 is the set of all signed 8-bit integers.
-// Range: -128 through 127.
-type int8 int8
-
-// int16 是所有带符号16位整数的集合。范围：-32768 至 32767。
-// int16 is the set of all signed 16-bit integers.
-// Range: -32768 through 32767.
-type int16 int16
-
-// int32 是所有带符号32位整数的集合。范围：-2147483648 至 2147483647。
-// int32 is the set of all signed 32-bit integers.
-// Range: -2147483648 through 2147483647.
-type int32 int32
-
-// int64 是所有带符号64位整数的集合。范围：-9223372036854775808 至 9223372036854775807。
-// int64 is the set of all signed 64-bit integers.
-// Range: -9223372036854775808 through 9223372036854775807.
-type int64 int64
-
-// float32 是所有IEEE-754 32位浮点数的集合。
-// float32 is the set of all IEEE-754 32-bit floating-point numbers.
-type float32 float32
-
-// float64 是所有IEEE-754 64位浮点数的集合。
-// float64 is the set of all IEEE-754 64-bit floating-point numbers.
-type float64 float64
-
-// complex64 是所有实部和虚部为 float32 的复数集合。
-// complex64 is the set of all complex numbers with float32 real and
-// imaginary parts.
-type complex64 complex64
-
-// complex128 是所有实部和虚部为 float64 的复数集合。
-// complex128 is the set of all complex numbers with float64 real and
-// imaginary parts.
-type complex128 complex128
-
-// string 是所有8位字节的字符串集合，习惯上用于代表以UTF-8编码的文本，但并不必须如此。
-// string 可为空，但不为 nil。string 类型的值是不变的。
-// string is the set of all strings of 8-bit bytes, conventionally but not
-// necessarily representing UTF-8-encoded text. A string may be empty, but
-// not nil. Values of string type are immutable.
-type string string
-
-// int 是带符号整数类型，其大小至少为32位。
-// 它是一种独特的类型，而不是 int32 的别名。
-// int is a signed integer type that is at least 32 bits in size. It is a
-// distinct type, however, and not an alias for, say, int32.
-type int int
-
-// uint 是无符号整数类型，其大小至少为32位。
-// 它是一种独特的类型，而不是 uint32 的别名。
-// uint is an unsigned integer type that is at least 32 bits in size. It is a
-// distinct type, however, and not an alias for, say, uint32.
-type uint uint
-
-// uintptr 为整数类型，其大小足以容纳任何指针的位模式。
-// uintptr is an integer type that is large enough to hold the bit pattern of
-// any pointer.
-type uintptr uintptr
-
-// byte 为 uint8 的别名，它完全等价于 uint8。
-// 习惯上用它来区别字节值和8位无符号整数值。
-// byte is an alias for uint8 and is equivalent to uint8 in all ways. It is
-// used, by convention, to distinguish byte values from 8-bit unsigned
-// integer values.
-type byte = uint8
-
-// rune 为 int32 的别名，它完全等价于 int32。
-// 习惯上用它来区别字符值和整数值。
-// rune is an alias for int32 and is equivalent to int32 in all ways. It is
-// used, by convention, to distinguish character values from integer values.
-type rune = int32
-
-// iota 为预声明的标识符，它表示常量声明中（一般在括号中），
-// 当前常量规范的无类型化整数序数。它从0开始索引。
-// iota is a predeclared identifier representing the untyped integer ordinal
-// number of the current const specification in a (usually parenthesized)
-// const declaration. It is zero-indexed.
-const iota = 0 // Untyped int. 无类型 int。
-
-// nil 为预声明的标示符，它表示指针、信道、函数、接口、映射或切片类型的零值。
-// nil is a predeclared identifier representing the zero value for a
-// pointer, channel, func, interface, map, or slice type.
-var nil Type // Type must be a pointer, channel, func, interface, map, or slice type // Type 必须为指针、信道、函数、接口、映射或切片类型。
-
-// Type 在此只用作文档目的。
-// 它代表所有Go的类型，但对于任何给定的函数请求来说，它都代表与其相同的类型。
-// Type is here for the purposes of documentation only. It is a stand-in
-// for any Go type, but represents the same type for any given function
-// invocation.
-type Type int
-
-// Type1 在此只用作文档目的。
-// 它代表所有Go的类型，但对于任何给定的函数请求来说，它都代表与其相同的类型。
-// Type1 is here for the purposes of documentation only. It is a stand-in
-// for any Go type, but represents the same type for any given function
-// invocation.
-type Type1 int
-
-// IntegerType 在此只用作文档目的。
-// 它代表所有的整数类型：如 int、uint、int8 等。
-// IntegerType is here for the purposes of documentation only. It is a stand-in
-// for any integer type: int, uint, int8 etc.
-type IntegerType int
-
-// FloatType 在此只用作文档目的。
-// 它代表所有的浮点数类型：即 float32 或 float64。
-// FloatType is here for the purposes of documentation only. It is a stand-in
-// for either float type: float32 or float64.
-type FloatType float32
-
-// ComplexType 在此只用作文档目的。
-// 它代表所有的复数类型：即 complex64 或 complex128。
-// ComplexType is here for the purposes of documentation only. It is a
-// stand-in for either complex type: complex64 or complex128.
-type ComplexType complex64
-
-// append 内建函数将元素追加到切片的末尾。
-// 若它有足够的容量，其目标就会重新切片以容纳新的元素。否则，就会分配一个新的基本数组。
-// append 返回更新后的切片。因此必须存储追加后的结果，通常为包含该切片自身的变量：
-/	    slice = append(slice, elem1, elem2)
-//	    slice = append(slice, anotherSlice...)
-// 作为一种特殊的情况，将字符追加到字节数组之后是合法的，就像这样：
-//	    slice = append([]byte("hello "), "world"...)
-
-// The append built-in function appends elements to the end of a slice. If
-// it has sufficient capacity, the destination is resliced to accommodate the
-// new elements. If it does not, a new underlying array will be allocated.
-// Append returns the updated slice. It is therefore necessary to store the
-// result of append, often in the variable holding the slice itself:
-//	slice = append(slice, elem1, elem2)
-//	slice = append(slice, anotherSlice...)
-// As a special case, it is legal to append a string to a byte slice, like this:
-//	slice = append([]byte("hello "), "world"...)
-func append(slice []Type, elems ...Type) []Type
-
-// 基本类型是深拷贝，引用类型是浅拷贝
-// copy 内建函数将元素从来源切片复制到目标切片中。
-// （特殊情况是，它也能将字节从字符串复制到字节切片中）。来源和目标可以重叠。
-// copy 返回被复制的元素数量，它会是 len(src) 和 len(dst) 中较小的那个。
-
-// The copy built-in function copies elements from a source slice into a
-// destination slice. (As a special case, it also will copy bytes from a
-// string to a slice of bytes.) The source and destination may overlap. Copy
-// returns the number of elements copied, which will be the minimum of
-// len(src) and len(dst).
-func copy(dst, src []Type) int
-
-// delete 内建函数按照指定的键将元素从映射中删除。
-// 若 m 为 nil 或无此元素，delete 即为空操作。
-// The delete built-in function deletes the element with the specified key
-// (m[key]) from the map. If m is nil or there is no such element, delete
-// is a no-op.
-func delete(m map[Type]Type1, key Type)
-
-// len 内建函数返回 v 的长度，这取决于具体类型：
-// 数组：v 中元素的数量。
-// 数组指针：*v 中元素的数量（即使 v 为 nil）。
-// 切片或映射：v 中元素的数量；若 v 为 nil，len(v) 即为零。
-// 字符串：v 中字节的数量。
-// 信道：信道缓存中队列（未读取）元素的数量；若 v 为 nil，len(v) 即为零
-// 对于某些参数，例如字符串文字或简单的数组表达式，结果可以是常量。 有关详细信息，请参见Go语言规范的“长度和容量”部分。
-// The len built-in function returns the length of v, according to its type:
-//	Array: the number of elements in v.
-//	Pointer to array: the number of elements in *v (even if v is nil).
-//	Slice, or map: the number of elements in v; if v is nil, len(v) is zero.
-//	String: the number of bytes in v.
-//	Channel: the number of elements queued (unread) in the channel buffer;
-//	         if v is nil, len(v) is zero.
-// For some arguments, such as a string literal or a simple array expression, the
-// result can be a constant. See the Go language specification's "Length and
-// capacity" section for details.
-func len(v Type) int
-
-// cap 内建函数返回 v 的容量，这取决于具体类型：
-// 数组：v 中元素的数量（与 len(v) 相同）。
-// 数组指针：*v 中元素的数量（与 len(v) 相同）。
-// 切片：在重新切片时，切片能够达到的最大长度；若 v 为 nil，len(v) 即为零。
-// 信道：按照元素的单元，相应信道缓存的容量；若 v 为 nil，len(v) 即为零。
-// 对于某些参数，例如简单的数组表达式，结果可以是常量。 有关详细信息，请参见Go语言规范的“长度和容量”部分。
-
-// The cap built-in function returns the capacity of v, according to its type:
-//	Array: the number of elements in v (same as len(v)).
-//	Pointer to array: the number of elements in *v (same as len(v)).
-//	Slice: the maximum length the slice can reach when resliced;
-//	if v is nil, cap(v) is zero.
-//	Channel: the channel buffer capacity, in units of elements;
-//	if v is nil, cap(v) is zero.
-// For some arguments, such as a simple array expression, the result can be a
-// constant. See the Go language specification's "Length and capacity" section for
-// details.
-func cap(v Type) int
-
-// make 内建函数分配并初始化一个类型为切片、映射、或（仅仅为）信道的对象。
-// 与 new 相同的是，其第一个实参为类型，而非值。不同的是，make 的返回类型
-// 与其参数相同，而非指向它的指针。其具体结果取决于具体的类型：
-// 切片：size 指定了其长度。该切片的容量等于其长度。第二个整数实参可用来指定
-//		不同的容量；它必须不小于其长度，因此 make([]int, 0, 10) 会分配一个长度为0，
-//		容量为10的切片。
-// 映射：初始分配的创建取决于 size，但产生的映射长度为0。size 可以省略，这种情况下
-//		就会分配一个小的起始大小。
-// 信道：信道的缓存根据指定的缓存容量初始化。若 size 为零或被省略，该信道即为无缓存的。
-
-// The make built-in function allocates and initializes an object of type
-// slice, map, or chan (only). Like new, the first argument is a type, not a
-// value. Unlike new, make's return type is the same as the type of its
-// argument, not a pointer to it. The specification of the result depends on
-// the type:
-//	Slice: The size specifies the length. The capacity of the slice is
-//	equal to its length. A second integer argument may be provided to
-//	specify a different capacity; it must be no smaller than the
-//	length. For example, make([]int, 0, 10) allocates an underlying array
-//	of size 10 and returns a slice of length 0 and capacity 10 that is
-//	backed by this underlying array.
-//	Map: An empty map is allocated with enough space to hold the
-//	specified number of elements. The size may be omitted, in which case
-//	a small starting size is allocated.
-//	Channel: The channel's buffer is initialized with the specified
-//	buffer capacity. If zero, or the size is omitted, the channel is
-//	unbuffered.
-func make(t Type, size ...IntegerType) Type
-
-// new 内建函数分配内存。
-// 其第一个实参为类型，而非值，其返回值为指向该类型的新分配的零值的指针。
-// The new built-in function allocates memory. The first argument is a type,
-// not a value, and the value returned is a pointer to a newly
-// allocated zero value of that type.
-func new(Type) *Type
-
-// complex 内建函数将两个浮点数值构造成一个复数值。
-// 其实部和虚部的大小必须相同，即 float32 或 float64（或可赋予它们的），其返回值
-// 即为对应的复数类型（complex64 对应 float32，complex128 对应 float64）。
-// The complex built-in function constructs a complex value from two
-// floating-point values. The real and imaginary parts must be of the same
-// size, either float32 or float64 (or assignable to them), and the return
-// value will be the corresponding complex type (complex64 for float32,
-// complex128 for float64).
-func complex(r, i FloatType) ComplexType
-
-// real 内建函数返回复数 c 的实部。
-// 其返回值为对应于 c 类型的浮点数。
-// The real built-in function returns the real part of the complex number c.
-// The return value will be floating point type corresponding to the type of c.
-func real(c ComplexType) FloatType
-
-// imag 内建函数返回复数 c 的虚部。
-// 其返回值为对应于 c 类型的浮点数。
-// The imag built-in function returns the imaginary part of the complex
-// number c. The return value will be floating point type corresponding to
-// the type of c.
-func imag(c ComplexType) FloatType
-
-// close 内建函数关闭信道，该信道必须为双向的或只发送的。
-// 它应当只由发送者执行，而不应由接收者执行，其效果是在最后发送的值被接收后停止该信道。
-// 在最后一个值从已关闭的信道 c 中被接收后，任何从 c 的接收操作都会无阻塞成功，
-// 它会返回该信道元素类型的零值。对于已关闭的信道，形式
-//	x, ok := <-c
-// 还会将 ok 置为 false。
-// The close built-in function closes a channel, which must be either
-// bidirectional or send-only. It should be executed only by the sender,
-// never the receiver, and has the effect of shutting down the channel after
-// the last sent value is received. After the last value has been received
-// from a closed channel c, any receive from c will succeed without
-// blocking, returning the zero value for the channel element. The form
-//	x, ok := <-c
-// will also set ok to false for a closed channel.
-func close(c chan<- Type)
-
-// 内置的panic函数停止当前goroutine的正常执行。 当函数F调用紧急情况时，F的正常执行立即停止。 F推迟执行的所有函数都以常规方式运行，然后F返回其调用方。 对调用者G而言，调用F的行为就像是对恐慌的调用，终止G的执行并运行任何延迟的函数。 这将继续执行，直到执行的goroutine中的所有功能以相反的顺序停止为止。 此时，程序将以非零退出代码终止。 此终止序列称为panicking，可以通过内置的功能restore控制。
-// The panic built-in function stops normal execution of the current
-// goroutine. When a function F calls panic, normal execution of F stops
-// immediately. Any functions whose execution was deferred by F are run in
-// the usual way, and then F returns to its caller. To the caller G, the
-// invocation of F then behaves like a call to panic, terminating G's
-// execution and running any deferred functions. This continues until all
-// functions in the executing goroutine have stopped, in reverse order. At
-// that point, the program is terminated with a non-zero exit code. This
-// termination sequence is called panicking and can be controlled by the
-// built-in function recover.
-func panic(v interface{})
-
-// 内置的recover功能允许程序管理恐慌性goroutine的行为。 在延迟函数（但不是由它调用的任何函数）中执行恢复调用将通过恢复正常执行来停止恐慌序列，并检索传递给panic调用的错误值。 如果在延迟函数之外调用了restore，它将不会停止紧急处理序列。 在这种情况下，或者当goroutine没有惊慌时，或者如果提供给panic的参数为nil，则restore返回nil。 因此，来自recovery的返回值将报告goroutine是否感到恐慌。
-// The recover built-in function allows a program to manage behavior of a
-// panicking goroutine. Executing a call to recover inside a deferred
-// function (but not any function called by it) stops the panicking sequence
-// by restoring normal execution and retrieves the error value passed to the
-// call of panic. If recover is called outside the deferred function it will
-// not stop a panicking sequence. In this case, or when the goroutine is not
-// panicking, or if the argument supplied to panic was nil, recover returns
-// nil. Thus the return value from recover reports whether the goroutine is
-// panicking.
-func recover() interface{}
-
-// print内置函数以特定于实现的方式格式化其参数，并将结果写入标准错误。 打印对于引导和调试很有用； 不保证会在该语言中保留。
-// The print built-in function formats its arguments in an
-// implementation-specific way and writes the result to standard error.
-// Print is useful for bootstrapping and debugging; it is not guaranteed
-// to stay in the language.
-func print(args ...Type)
-
-// 内置的println函数以实现特定方式格式化其参数，并将结果写入标准错误。 总是在参数之间添加空格，并添加换行符。 Println对于引导和调试很有用； 不保证会在该语言中保留。
-// The println built-in function formats its arguments in an
-// implementation-specific way and writes the result to standard error.
-// Spaces are always added between arguments and a newline is appended.
-// Println is useful for bootstrapping and debugging; it is not guaranteed
-// to stay in the language.
-func println(args ...Type)
-
-// 错误内置接口类型是用于表示错误状态的常规接口，其中nil值表示没有错误。
-// The error built-in interface type is the conventional interface for
-// representing an error condition, with the nil value representing no error.
-type error interface {
-	Error() string
-}
+// Alignof 接受一个任意类型的表达式 x 并返回假定的变量 v 的对齐，这里的 v 可看做通过
+// var v = x 声明的变量。它是最大值 m 使其满足 v 的地址取模 m 为零。
+// 它与reflect.TypeOf（x）.Align（）返回的值相同。 作为一种特殊情况，如果变量s是结构类型，而f是该结构中的字段，则Alignof（s.f）将返回结构中该类型字段的所需对齐方式。 这种情况与reflect.TypeOf（s.f）.FieldAlign（）返回的值相同。
+Alignof的返回值是Go常数。
+// Alignof takes an expression x of any type and returns the required alignment
+// of a hypothetical variable v as if v was declared via var v = x.
+// It is the largest value m such that the address of v is always zero mod m.
+// It is the same as the value returned by reflect.TypeOf(x).Align().
+// As a special case, if a variable s is of struct type and f is a field
+// within that struct, then Alignof(s.f) will return the required alignment
+// of a field of that type within a struct. This case is the same as the
+// value returned by reflect.TypeOf(s.f).FieldAlign().
+// The return value of Alignof is a Go constant.
+func Alignof(x ArbitraryType) uintptr
 ```
+
