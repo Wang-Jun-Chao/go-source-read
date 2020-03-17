@@ -91,6 +91,12 @@ type Type interface {
 	 **/
 	Method(int) Method
 
+    // MethodByName返回在类型的方法集中具有该名称的方法，以及一个布尔值，指示是否找到该方法。
+    //
+    // 对于非接口类型T或*T，返回的Method的Type和Func字段描述了一个函数，其第一个参数为接收者。
+    //
+    // 对于接口类型，返回的Method的Type字段给出了方法签名，没有接收者，而Func字段为nil
+    //
 	// MethodByName returns the method with that name in the type's
 	// method set and a boolean indicating if the method was found.
 	//
@@ -99,13 +105,29 @@ type Type interface {
 	//
 	// For an interface type, the returned Method's Type field gives the
 	// method signature, without a receiver, and the Func field is nil.
+	/**
+	 * @param string 方法名
+	 * @return Method 方法结构体
+	 * @return bool true: 表示找到
+	 * @date 2020-03-16 14:04:12
+	 **/
 	MethodByName(string) (Method, bool)
 
 	// NumMethod returns the number of exported methods in the type's method set.
+	/**
+	 * NumMethod返回类型的方法集中导出的方法的数量。
+	 * @return int 方法集中导出的方法的数量
+	 * @date 2020-03-16 17:02:19
+	 **/
 	NumMethod() int
 
 	// Name returns the type's name within its package for a defined type.
 	// For other (non-defined) types it returns the empty string.
+	/**
+	 * Name返回其包中已定义类型的类型名称。 对于其他（未定义）类型，它返回空字符串。
+	 * @return string 包中已定义类型的类型名称
+	 * @date 2020-03-16 17:04:06
+	 **/
 	Name() string
 
 	// PkgPath returns a defined type's package path, that is, the import path
@@ -113,10 +135,21 @@ type Type interface {
 	// If the type was predeclared (string, error) or not defined (*T, struct{},
 	// []int, or A where A is an alias for a non-defined type), the package path
 	// will be the empty string.
+	/**
+	 * PkgPath返回定义的类型的包路径，即唯一标识包的导入路径，例如"encoding/base64"。
+     * 如果类型是预先声明的（字符串，错误）或未定义（*T，struct{}，[]int或A，其中A是未定义类型的别名），则包路径将为空字符串。
+	 * @return string 回定义的类型的包路径
+	 * @date 2020-03-16 17:04:49
+	 **/
 	PkgPath() string
 
 	// Size returns the number of bytes needed to store
 	// a value of the given type; it is analogous to unsafe.Sizeof.
+	/**
+	 * Size返回存储给定类型的值所需的字节数；它类似于unsafe.Sizeof。
+	 * @return uintptr 存储给定类型的值所需的字节数
+	 * @date 2020-03-16 17:06:39
+	 **/
 	Size() uintptr
 
 	// String returns a string representation of the type.
@@ -124,23 +157,68 @@ type Type interface {
 	// (e.g., base64 instead of "encoding/base64") and is not
 	// guaranteed to be unique among types. To test for type identity,
 	// compare the Types directly.
+	/**
+	 * String返回该类型的字符串表示形式。字符串表示形式可以使用缩短的包名称（例如，使用base64代替"encoding/base64"），
+	 * 并且不能保证类型之间的唯一性。要测试类型标识，请直接比较类型。
+	 * @return string 类型的字符串表示形式
+	 * @date 2020-03-16 17:07:52
+	 **/
 	String() string
 
 	// Kind returns the specific kind of this type.
+	/**
+	 * Kind返回此类型的特定类型。
+	 * @return Kind 此类型的特定类型
+	 * @date 2020-03-16 17:08:43
+	 **/
 	Kind() Kind
 
 	// Implements reports whether the type implements the interface type u.
+	/**
+	 * 实现报告类型是否实现接口类型u。
+	 * @param u 接口类型
+	 * @return true: 实现了接口类型u
+	 * @date 2020-03-16 17:09:43
+	 **/
 	Implements(u Type) bool
 
 	// AssignableTo reports whether a value of the type is assignable to type u.
+	/**
+	 * AssignableTo报告类型的值是否可分配给类型u。
+	 * @param u 任意类型
+	 * @return true: 类型的值是可分配给类型u
+	 * @date 2020-03-16 17:10:28
+	 **/
 	AssignableTo(u Type) bool
 
 	// ConvertibleTo reports whether a value of the type is convertible to type u.
+	/**
+	 * ConvertibleTo报告该类型的值是否可转换为u类型。
+	 * @param u 任意类型
+	 * @return 类型的值是否可转换为u类型。
+	 * @date 2020-03-16 17:11:44
+	 **/
 	ConvertibleTo(u Type) bool
 
 	// Comparable reports whether values of this type are comparable.
+	/**
+	 * Comparable较报告此类型的值是否可比较。
+	 * @return true 此类型的值是可比较
+	 * @date 2020-03-16 17:12:22
+	 **/
 	Comparable() bool
 
+    /**
+     * 方法仅适用于某些类型，具体取决于种类。每种类型允许使用的方法是：
+     * Int*, Uint*, Float*, Complex*: Bits
+     * Array: Elem, Len
+     * Chan: ChanDir, Elem
+     * Func: In, NumIn, Out, NumOut, IsVariadic.
+     * Map: Key, Elem
+     * Ptr: Elem
+     * Slice: Elem
+     * Struct: Field, FieldByIndex, FieldByName, FieldByNameFunc, NumField
+     **/
 	// Methods applicable only to some types, depending on Kind.
 	// The methods allowed for each kind are:
 	//
@@ -156,6 +234,14 @@ type Type interface {
 	// Bits returns the size of the type in bits.
 	// It panics if the type's Kind is not one of the
 	// sized or unsized Int, Uint, Float, or Complex kinds.
+	/**
+	 * Bits返回以位为单位的类型的大小。 如果类型的Kind不是大小或大小不完整的Int，Uint，Float或Complex类型之一，它就会感到恐慌。
+	 * @param
+	 * @param
+	 * @return
+	 * @return
+	 * @date 2020-03-16 17:16:37
+	 **/
 	Bits() int
 
 	// ChanDir returns a channel type's direction.
