@@ -236,16 +236,18 @@ type Type interface {
 	// sized or unsized Int, Uint, Float, or Complex kinds.
 	/**
 	 * Bits返回以位为单位的类型的大小。 如果类型的Kind不是大小或大小不完整的Int，Uint，Float或Complex类型之一，它就会感到恐慌。
-	 * @param
-	 * @param
-	 * @return
-	 * @return
+	 * @return 位为单位的类型的大小
 	 * @date 2020-03-16 17:16:37
 	 **/
 	Bits() int
 
 	// ChanDir returns a channel type's direction.
 	// It panics if the type's Kind is not Chan.
+	/**
+	 * ChanDir返回通道类型的方向。如果类型的种类不是Chan，则会引起恐慌。
+	 * @return 通道类型的方向
+	 * @date 2020-03-17 08:05:51
+	 **/
 	ChanDir() ChanDir
 
 	// IsVariadic reports whether a function type's final input parameter
@@ -260,25 +262,63 @@ type Type interface {
 	//	t.IsVariadic() == true
 	//
 	// IsVariadic panics if the type's Kind is not Func.
+	/**
+	 * IsVariadic报告函数类型的最终输入参数是否为“...”参数。如果是这样，则t.In(t.NumIn()-1)返回参数的隐式实际类型[]T。
+     *
+     * 具体来说，如果t代表func(x int，y ... float64)，则
+     *
+     * t.NumIn()== 2
+     * t.In(0)是“ int”的reflect.Type
+     * t.In(1)是“ [] float64”的reflect.Type
+     * t.IsVariadic()== true
+     *
+     * 如果类型的Kind不是Func，则为IsVariadic恐慌。
+	 * @return 是否是可变参数类型，true：是
+	 * @date 2020-03-17 08:09:56
+	 **/
 	IsVariadic() bool
 
 	// Elem returns a type's element type.
 	// It panics if the type's Kind is not Array, Chan, Map, Ptr, or Slice.
+	/**
+	 * Elem返回类型的元素类型。如果类型的Kind不是Array，Chan，Map，Ptr或Slice，它会感到恐慌。
+	 * @return 元素类型
+	 * @date 2020-03-17 08:12:23
+	 **/
 	Elem() Type
 
 	// Field returns a struct type's i'th field.
 	// It panics if the type's Kind is not Struct.
 	// It panics if i is not in the range [0, NumField()).
+	/**
+	 * Field返回结构类型的第i个字段。如果类型的Kind不是Struct，它会感到恐慌。如果i不在[0，NumField())范围内，它引起恐慌。
+	 * @param i 第i个字段
+	 * @return 结体字段类型
+	 * @date 2020-03-17 08:13:06
+	 **/
 	Field(i int) StructField
 
 	// FieldByIndex returns the nested field corresponding
 	// to the index sequence. It is equivalent to calling Field
 	// successively for each index i.
 	// It panics if the type's Kind is not Struct.
+	/**
+	 * FieldByIndex返回与索引序列相对应的嵌套字段。等效于为每个索引i依次调用Field。如果类型的Kind不是Struct，它会引起恐慌。
+	 * @param index 字段索引数组
+	 * @return 结体字段类型
+	 * @date 2020-03-17 08:15:36
+	 **/
 	FieldByIndex(index []int) StructField
 
 	// FieldByName returns the struct field with the given name
 	// and a boolean indicating if the field was found.
+	/**
+	 * FieldByName返回具有给定名称的struct字段和一个布尔值，指示是否找到了该字段。
+	 * @param name 字符段名称
+	 * @return StructField 结体字段类型
+	 * @return bool true: 找到了该字段。false：否
+	 * @date 2020-03-17 08:16:43
+	 **/
 	FieldByName(name string) (StructField, bool)
 
 	// FieldByNameFunc returns the struct field with a name
@@ -293,42 +333,107 @@ type Type interface {
 	// and FieldByNameFunc returns no match.
 	// This behavior mirrors Go's handling of name lookup in
 	// structs containing embedded fields.
+	/**
+	 * FieldByNameFunc返回具有满足match函数名称的struct字段和一个布尔值，指示是否找到该字段。
+     *
+     * FieldByNameFunc会先考虑结构本身中的字段，然后再考虑所有嵌入式结构中的字段，并以广度优先
+     * 的顺序停在最浅的嵌套深度，其中包含一个或多个满足match函数的字段。如果该深度处的多个字段满
+     * 足匹配功能，则它们会相互取消，并且FieldByNameFunc不返回匹配项。此行为反映了Go在包含嵌入
+     * 式字段的结构中对名称查找的处理。
+	 * @param match 根据名称进行匹配的函数
+	 * @return StructField 结体字段类型
+	 * @return bool true: 找到了该字段。false：否
+	 * @date 2020-03-17 08:21:04
+	 **/
 	FieldByNameFunc(match func(string) bool) (StructField, bool)
 
 	// In returns the type of a function type's i'th input parameter.
 	// It panics if the type's Kind is not Func.
 	// It panics if i is not in the range [0, NumIn()).
+	/**
+	 * In返回函数类型的第i个输入参数的类型。如果类型的Kind不是Func，它会感到恐慌。如果i不在[0, NumIn())范围内，它将发生恐慌。
+	 * @param i 第i个参数
+	 * @return 参数的类型
+	 * @date 2020-03-17 08:24:45
+	 **/
 	In(i int) Type
 
 	// Key returns a map type's key type.
 	// It panics if the type's Kind is not Map.
+	/**
+	 * Key返回Map类型的键类型。如果类型的Kind不是Map，则会发生恐慌。
+	 * @return 键类型
+	 * @date 2020-03-17 08:26:07
+	 **/
 	Key() Type
 
 	// Len returns an array type's length.
 	// It panics if the type's Kind is not Array.
+	/**
+	 * Len返回数组类型的长度。如果类型的Kind不是Array，它会惊慌。
+	 * @return 数组类型的长度
+	 * @date 2020-03-17 08:27:12
+	 **/
 	Len() int
 
 	// NumField returns a struct type's field count.
 	// It panics if the type's Kind is not Struct.
+	/**
+	 * NumField返回结构类型的字段数。如果类型的Kind不是Struct，它会引起恐慌。
+	 * @return 类型的字段数
+	 * @date 2020-03-17 08:29:50
+	 **/
 	NumField() int
 
 	// NumIn returns a function type's input parameter count.
 	// It panics if the type's Kind is not Func.
+	/**
+	 * NumIn返回函数类型的输入参数个数。如果类型的Kind不是Func，它会引起恐慌。
+	 * @return 输入参数个数
+	 * @date 2020-03-17 08:30:48
+	 **/
 	NumIn() int
 
 	// NumOut returns a function type's output parameter count.
 	// It panics if the type's Kind is not Func.
+    /**
+	 * NumIn返回函数类型的输出参数个数。如果类型的Kind不是Func，它会引起恐慌。
+	 * @return 输出参数个数
+	 * @date 2020-03-17 08:30:48
+	 **/
 	NumOut() int
 
 	// Out returns the type of a function type's i'th output parameter.
 	// It panics if the type's Kind is not Func.
 	// It panics if i is not in the range [0, NumOut()).
+	/**
+	 * Out返回函数类型的第i个输出参数的类型。如果类型的Kind不是Func，它会引起恐慌。如果我不在[0, NumOut())范围内，它会引起恐慌。
+	 * @param 第i个输出参数
+	 * @return 第i个输出参数类型
+	 * @date 2020-03-17 08:32:49
+	 **/
 	Out(i int) Type
-
+    
+    /**
+     * 此方法获取大多数值的一些通用实现
+     * @return *rtype rtype是大多数值的通用实现。它嵌入在其他结构类型中。
+     * @date 2020-03-17 08:35:18 
+     **/
 	common() *rtype
+	/**
+	 * 此方法获取值的非通用实现
+	 * @return *uncommonType uncommonType仅对于定义的类型或带有方法的类型存在
+	 * @date 2020-03-17 08:36:42 
+	 **/
 	uncommon() *uncommonType
 }
 
+/**
+ * BUG（rsc）：FieldByName和相关函数将结构字段名称视为相等，即使名称相同，即使它们是源自不同包的未导出名称也是如此。
+ * 这样做的实际效果是，如果结构类型t包含多个名为x的字段（从不同的程序包中嵌入的），则t.FieldByName("x")的结果定义不明确。
+ * FieldByName可能返回名为x的字段之一，或者可能报告没有字段。有关更多详细信息，请参见https://golang.org/issue/4876。
+ * 示例：https://play.golang.org/p/WTj5d06CQ3
+ **/
 // BUG(rsc): FieldByName and related functions consider struct field names to be equal
 // if the names are equal, even if they are unexported names originating
 // in different packages. The practical effect of this is that the result of
@@ -337,12 +442,21 @@ type Type interface {
 // FieldByName may return one of the fields named x or may report that there are none.
 // See https://golang.org/issue/4876 for more details.
 
+/**
+ * 这些数据结构是编译器已知的（../../cmd/internal/gc/reflect.go）。
+ * 少部分被../runtime/type.go已知并且传递给调试器。
+ * 他们都被../runtime/type.go已知
+ *
+ */
 /*
  * These data structures are known to the compiler (../../cmd/internal/gc/reflect.go).
  * A few are known to ../runtime/type.go to convey to debuggers.
  * They are also known to ../runtime/type.go.
  */
 
+/**
+ * Kind代表类型所代表的特定类型的种类。零种类不是有效种类。
+ **/
 // A Kind represents the specific kind of type that a Type represents.
 // The zero Kind is not a valid kind.
 type Kind uint
