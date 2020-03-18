@@ -498,6 +498,14 @@ const (
 //	cmd/compile/internal/gc/reflect.go
 //	cmd/link/internal/ld/decodesym.go
 //	runtime/type.go
+/**
+ * rtype使用tflag来指示紧随rtype值之后在内存中还有哪些额外的类型信息。
+ *
+ * tflag值必须与以下副本保持同步：
+ * cmd/compile/internal/gc/reflect.go
+ * cmd/link/internal/ld/decodesym.go
+ * runtime/type.go
+ **/
 type tflag uint8
 
 const (
@@ -512,26 +520,52 @@ const (
 	//		u uncommonType
 	//	}
 	//	u := &(*tUncommon)(unsafe.Pointer(t)).u
-	tflagUncommon tflag = 1 << 0
+	/**
+	 * tflagUncommon意味着在外部类型结构之后，还有一个指针* uncommonType。
+     *
+     * 例如，如果t.Kind()== Struct且t.tflag&tflagUncommon != 0，则t具有uncommonType数据，可以按以下方式访问它：
+     *  type tUncommon struct {
+     *      structType
+     *      u uncommonType
+     *  }
+     *  u := &(*tUncommon)(unsafe.Pointer(t)).u
+	 **/
+	tflagUncommon tflag = 1 << 0 // 0x00000001 = 1
 
 	// tflagExtraStar means the name in the str field has an
 	// extraneous '*' prefix. This is because for most types T in
 	// a program, the type *T also exists and reusing the str data
 	// saves binary size.
-	tflagExtraStar tflag = 1 << 1
+	/**
+	 * tflagExtraStar表示str字段中的名称带有多余的“*”前缀。这是因为对于程序中的大多数T类型，
+	 * T类型也存在，并且重新使用str数据可节省二进制大小。
+	 **/
+	tflagExtraStar tflag = 1 << 1 // 0x00000010 = 2
 
 	// tflagNamed means the type has a name.
-	tflagNamed tflag = 1 << 2
+	/**
+	 * tflagNamed表示类型具有名称。
+	 **/
+	tflagNamed tflag = 1 << 2 // 0x00000100 = 4
 
 	// tflagRegularMemory means that equal and hash functions can treat
 	// this type as a single region of t.size bytes.
-	tflagRegularMemory tflag = 1 << 3
+	/**
+	 * tflagRegularMemory意味着equal和hash函数可以将此类型视为t.size字节的单个区域。
+	 **/
+	tflagRegularMemory tflag = 1 << 3 // 0x00001000 = 8
 )
 
 // rtype is the common implementation of most values.
 // It is embedded in other struct types.
 //
 // rtype must be kept in sync with ../runtime/type.go:/^type._type.
+/**
+ * rtype是大多数值的通用实现。
+ * 它嵌入在其他结构类型中。
+ *
+ * rtype必须与../runtime/type.go:/^type._type保持同步。
+ **/
 type rtype struct {
 	size       uintptr
 	ptrdata    uintptr // number of bytes in the type that can contain pointers
