@@ -568,62 +568,82 @@ const (
  **/
 type rtype struct {
 	size       uintptr
-	ptrdata    uintptr // number of bytes in the type that can contain pointers
-	hash       uint32  // hash of type; avoids computation in hash tables
-	tflag      tflag   // extra type information flags
-	align      uint8   // alignment of variable with this type
-	fieldAlign uint8   // alignment of struct field with this type
-	kind       uint8   // enumeration for C
+	ptrdata    uintptr // number of bytes in the type that can contain pointers // 包含指针的类型需要的字节数
+	hash       uint32  // hash of type; avoids computation in hash tables // 类型的哈希避免在哈希表中进行计算
+	tflag      tflag   // extra type information flags // 额外类型信息标志
+	align      uint8   // alignment of variable with this type // 变量与此类型的对齐 Question: 都有哪些值代表什么
+	fieldAlign uint8   // alignment of struct field with this type // 结构体字段与此类型的对齐 Question: 都有哪些值代表什么
+	kind       uint8   // enumeration for C // C的枚举 Question: 都有哪些值代表什么
+	// 比较此类型的比较函数
 	// function for comparing objects of this type
 	// (ptr to object A, ptr to object B) -> ==?
 	equal     func(unsafe.Pointer, unsafe.Pointer) bool
-	gcdata    *byte   // garbage collection data
-	str       nameOff // string form
-	ptrToThis typeOff // type for pointer to this type, may be zero
+	gcdata    *byte   // garbage collection data // 垃圾收集数据 Question: 会有一些什么样子的数据
+	str       nameOff // string form // 字符串形式 Question: 有哪些字符串形式
+	ptrToThis typeOff // type for pointer to this type, may be zero // 指向此类型的指针的类型，可以为零
 }
 
 // Method on non-interface type
+/**
+ * 非接口类型的方法
+ **/
 type method struct {
-	name nameOff // name of method
-	mtyp typeOff // method type (without receiver)
-	ifn  textOff // fn used in interface call (one-word receiver)
-	tfn  textOff // fn used for normal method call
+	name nameOff // name of method // 方法名
+	mtyp typeOff // method type (without receiver) // 方法类型（无接收者）
+	ifn  textOff // fn used in interface call (one-word receiver) // 接口调用中使用的fn（单字接收器）
+	tfn  textOff // fn used for normal method call // fn用于普通方法调用
 }
 
 // uncommonType is present only for defined types or types with methods
 // (if T is a defined type, the uncommonTypes for T and *T have methods).
 // Using a pointer to this struct reduces the overall size required
 // to describe a non-defined type with no methods.
+/**
+ * uncommonType仅对定义的类型或带有方法的类型存在（如果T是定义的类型，则T和*T的uncommonTypes具有方法）。
+ * 使用指向此结构的指针可减少描述没有方法的未定义类型所需的总体大小。
+ **/
 type uncommonType struct {
-	pkgPath nameOff // import path; empty for built-in types like int, string
-	mcount  uint16  // number of methods
-	xcount  uint16  // number of exported methods
-	moff    uint32  // offset from this uncommontype to [mcount]method
-	_       uint32  // unused
+	pkgPath nameOff // import path; empty for built-in types like int, string // 导入路径；对于内置类型（如int，string）为空
+	mcount  uint16  // number of methods // 方法数量
+	xcount  uint16  // number of exported methods // 导出的方法数量
+	moff    uint32  // offset from this uncommontype to [mcount]method // 从uncommontype到[mcount]method偏移量
+	_       uint32  // unused // 未使用
 }
 
 // ChanDir represents a channel type's direction.
+/**
+ * ChanDir表示通道类型的方向。
+ * 1: 发送通道
+ * 2: 接收通道
+ * 3: 双向通道
+ **/
 type ChanDir int
 
 const (
-	RecvDir ChanDir             = 1 << iota // <-chan
-	SendDir                                 // chan<-
-	BothDir = RecvDir | SendDir             // chan
+	RecvDir ChanDir             = 1 << iota // <-chan // 发送通道
+	SendDir                                 // chan<- // 接收通道
+	BothDir = RecvDir | SendDir             // chan   // 双向通道
 )
 
 // arrayType represents a fixed array type.
+/**
+ * arrayType表示固定大小的数组类型。
+ */
 type arrayType struct {
-	rtype
-	elem  *rtype // array element type
-	slice *rtype // slice type
-	len   uintptr
+	rtype // 通用数据类型
+	elem  *rtype // array element type // 数组元素类型
+	slice *rtype // slice type         // 切片类型
+	len   uintptr                      // 数组类型的长度
 }
 
 // chanType represents a channel type.
+/**
+ * chanType表示通道类型。
+ */
 type chanType struct {
-	rtype
-	elem *rtype  // channel element type
-	dir  uintptr // channel direction (ChanDir)
+	rtype // 通用数据类型
+	elem *rtype  // channel element type            // 通道元素类型
+	dir  uintptr // channel direction (ChanDir)     // 通道方向（ChanDir）
 }
 
 // funcType represents a function type.
@@ -637,71 +657,112 @@ type chanType struct {
 //		uncommonType
 //		[2]*rtype    // [0] is in, [1] is out
 //	}
+/**
+ * funcType表示函数类型。
+ *
+ * 每个in和out参数的*rtype存储在一个数组中，该数组紧随funcType（可能还有其uncommonType）。
+ * 因此，具有一个方法，一个输入和一个输出的函数类型为：
+ *  struct {
+ *      funcType
+ *      uncommonType
+ *      [2]*rtype    // [0]是输入参数, [1]输出结果
+ *  }
+ */
 type funcType struct {
-	rtype
-	inCount  uint16
-	outCount uint16 // top bit is set if last input parameter is ...
+	rtype // 通用数据类型
+	inCount  uint16 // 输入参数的个数
+	outCount uint16 // top bit is set if last input parameter is ... // 输出参数的个数，如果最后一个输入参数为...，则设置最高位
 }
 
 // imethod represents a method on an interface type
+/**
+ * imethod表示接口类型上的方法
+ */
 type imethod struct {
-	name nameOff // name of method
-	typ  typeOff // .(*FuncType) underneath
+	name nameOff // name of method // 方法名
+	typ  typeOff // .(*FuncType) underneath // Question: 这是什么
 }
 
 // interfaceType represents an interface type.
+/**
+ * interfaceType represents an interface type.
+ */
 type interfaceType struct {
-	rtype
-	pkgPath name      // import path
-	methods []imethod // sorted by hash
+	rtype // 通用数据类型
+	pkgPath name      // import path        // 导入路径
+	methods []imethod // sorted by hash     // 接口方法，根据hash排序
 }
 
 // mapType represents a map type.
+/**
+ * mapType表示Map类型。
+ */
 type mapType struct {
-	rtype
-	key    *rtype // map key type
-	elem   *rtype // map element (value) type
-	bucket *rtype // internal bucket structure
-	// function for hashing keys (ptr to key, seed) -> hash
+	rtype // 通用数据类型
+	key    *rtype // map key type                                   // map key的类型
+	elem   *rtype // map element (value) type                       // map元素的类型
+	bucket *rtype // internal bucket structure                      // hash桶结构
+	// function for hashing keys (ptr to key, seed) -> hash         // hash函数
 	hasher     func(unsafe.Pointer, uintptr) uintptr
-	keysize    uint8  // size of key slot
-	valuesize  uint8  // size of value slot
-	bucketsize uint16 // size of bucket
-	flags      uint32
+	keysize    uint8  // size of key slot                           // key槽数
+	valuesize  uint8  // size of value slot                         // value槽数
+	bucketsize uint16 // size of bucket                             // 桶数
+	flags      uint32                                               // Question: 用来做什么
 }
 
 // ptrType represents a pointer type.
+/**
+ * ptrType表示指针类型。
+ */
 type ptrType struct {
-	rtype
-	elem *rtype // pointer element (pointed at) type
+	rtype // 通用数据类型
+	elem *rtype // pointer element (pointed at) type // 指针指向的元素类型
 }
 
 // sliceType represents a slice type.
+/**
+ * sliceType表示切片类型。
+ */
 type sliceType struct {
-	rtype
-	elem *rtype // slice element type
+	rtype // 通用数据类型
+	elem *rtype // slice element type // 切片元素类型
 }
 
 // Struct field
+/**
+ * 结构体字段类型
+ */
 type structField struct {
-	name        name    // name is always non-empty
-	typ         *rtype  // type of field
-	offsetEmbed uintptr // byte offset of field<<1 | isEmbedded
+	name        name    // name is always non-empty                 // 名称始终为非空
+	typ         *rtype  // type of field                            // 字段类型
+	offsetEmbed uintptr // byte offset of field<<1 | isEmbedded     // 偏移量指针与嵌入类型共用字段
 }
-
+/**
+ * 求偏移量
+ * @return uintptr 偏移量指针
+ * @date 2020-03-18 12:49:38
+ **/
 func (f *structField) offset() uintptr {
 	return f.offsetEmbed >> 1
 }
 
+/**
+ * 是否是嵌入类型
+ * @return true: 是嵌入类型
+ * @date 2020-03-18 12:50:47
+ **/
 func (f *structField) embedded() bool {
 	return f.offsetEmbed&1 != 0
 }
 
 // structType represents a struct type.
+/**
+ * structType表示结构类型。
+ **/
 type structType struct {
-	rtype
-	pkgPath name
-	fields  []structField // sorted by offset
+	rtype // 通用数据类型
+	pkgPath name // 包名
+	fields  []structField // sorted by offset // 结构体字段，根据偏量排序
 }
 
 // name is an encoded type name with optional extra data.
@@ -727,6 +788,24 @@ type structType struct {
 //
 // If a name starts with "*", then the exported bit represents
 // whether the pointed to type is exported.
+/**
+ * name是带有可选附加数据的编码类型名称。
+ *
+ * 第一个字节是一个位字段，其中包含
+ *  1 << 0 名称是可导出的
+ *  1 << 1 标签数据跟随名称之后
+ *  1 << 2 pkgPath nameOff跟随名称和标签数据之后
+ *
+ * 接下来的两个字节是数据长度：
+ *  l := uint16(data[1])<<8 | uint16(data[2])
+ * 字节[3:3+1]是字符串数据。
+ *
+ * 如果名称后跟随标签数据，则字节3+1和3+1+1是标签长度，数据跟随在后面
+ * 如果有导入路径，则数据末尾的4个字节形成nameOff
+ * 仅为在与包类型不同的包中定义的具体方法设置导入路径。
+ *
+ * 如果名称以“*”开头，则导出的位表示是否导出了所指向的类型。
+ */
 type name struct {
 	bytes *byte
 }
