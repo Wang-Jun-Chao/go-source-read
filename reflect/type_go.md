@@ -799,6 +799,10 @@ type structType struct {
  * 接下来的两个字节是数据长度：
  *  l := uint16(data[1])<<8 | uint16(data[2])
  * 字节[3:3+1]是字符串数据。
+ * 数据结构示意思图，下划线表示一个位，+和|号表示分割符，...表示省略多个字节
+ * +--------+--------+--------+--------...--------+--------+--------+--------...--------+--------+--------+--------+--------+
+ * |     ???|    name len     |     name data     |     tag len     |      tag data     |                                   |
+ * +--------+--------+--------+--------...--------+--------+--------+--------...--------+--------+--------+--------+--------+
  *
  * 如果名称后跟随标签数据，则字节3+1和3+1+1是标签长度，数据跟随在后面
  * 如果有导入路径，则数据末尾的4个字节形成nameOff
@@ -809,36 +813,70 @@ type structType struct {
 type name struct {
 	bytes *byte
 }
-
+/**
+ * 添加字符串
+ * @param 偏移量
+ * @param 字符串，实际未使用到
+ * @return 返回新的引用地址
+ * @date 2020-03-19 08:28:49
+ **/
 func (n name) data(off int, whySafe string) *byte {
 	return (*byte)(add(unsafe.Pointer(n.bytes), uintptr(off), whySafe))
 }
 
+/**
+ * 是否是可导出类型
+ * @return true: 是
+ * @date 2020-03-19 08:31:13
+ **/
 func (n name) isExported() bool {
-	return (*n.bytes)&(1<<0) != 0
+	return (*n.bytes)&(1<<0) != 0 // 最低位为0
 }
 
+/**
+ * 名称长度
+ * @return
+ * @date 2020-03-19 08:33:18
+ **/
 func (n name) nameLen() int {
+    // 0b表示前二进制前缀，a,b,c,d表示0或者1
+    // bytes = [0baaaaaaaa, 0bbbbbbbbb, 0bcccccccc, 0bdddddddd]
+    // A: uint16(*n.data(1, "name len field"))<<8 ==> 0bbbbbbbbb_?????????
+    // B: uint16(*n.data(2, "name len field")) ==> 0b????????_cccccccc
+    // A|B ==> 00bbbbbbbbb_cccccccc
 	return int(uint16(*n.data(1, "name len field"))<<8 | uint16(*n.data(2, "name len field")))
 }
 
+/**
+ * 获取标签的长度
+ * @return
+ * @date 2020-03-19 08:48:05
+ **/
 func (n name) tagLen() int {
+    // 第一个字节的第二位是1说明有标签
 	if *n.data(0, "name flag field")&(1<<1) == 0 {
 		return 0
 	}
+
+	// 标签长度使用两个字节表示，第一个字节所在位置
 	off := 3 + n.nameLen()
 	return int(uint16(*n.data(off, "name taglen field"))<<8 | uint16(*n.data(off+1, "name taglen field")))
 }
 
+/**
+ * 获取名称字符串
+ * @return 名称字符串
+ * @date 2020-03-19 09:01:31
+ **/
 func (n name) name() (s string) {
 	if n.bytes == nil {
 		return
 	}
-	b := (*[4]byte)(unsafe.Pointer(n.bytes))
+	b := (*[4]byte)(unsafe.Pointer(n.bytes))    // 创建一个地址
 
-	hdr := (*stringHeader)(unsafe.Pointer(&s))
-	hdr.Data = unsafe.Pointer(&b[3])
-	hdr.Len = int(b[1])<<8 | int(b[2])
+	hdr := (*stringHeader)(unsafe.Pointer(&s))  // 创建stringHeader对象
+	hdr.Data = unsafe.Pointer(&b[3])            // 设置数据开始位置
+	hdr.Len = int(b[1])<<8 | int(b[2])          // 设置数据长度
 	return s
 }
 
