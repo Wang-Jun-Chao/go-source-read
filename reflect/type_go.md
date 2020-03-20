@@ -685,7 +685,7 @@ type imethod struct {
 
 // interfaceType represents an interface type.
 /**
- * interfaceType represents an interface type.
+ * interfaceType代表接口类型
  */
 type interfaceType struct {
 	rtype // 通用数据类型
@@ -801,7 +801,7 @@ type structType struct {
  * 字节[3:3+1]是字符串数据。
  * 数据结构示意思图，下划线表示一个位，+和|号表示分割符，...表示省略多个字节
  * +--------+--------+--------+--------...--------+--------+--------+--------...--------+--------+--------+--------+--------+
- * |     ???|    name len     |     name data     |     tag len     |      tag data     |                                   |
+ * |     ???|    name len     |     name data     |     tag len     |      tag data     |          pkgPath nameOff          |
  * +--------+--------+--------+--------...--------+--------+--------+--------...--------+--------+--------+--------+--------+
  *
  * 如果名称后跟随标签数据，则字节3+1和3+1+1是标签长度，数据跟随在后面
@@ -880,73 +880,104 @@ func (n name) name() (s string) {
 	return s
 }
 
+/**
+ * 获取标签字符串
+ * @return 标签字符串
+ * @date 2020-03-19 09:39:21
+ **/
 func (n name) tag() (s string) {
-	tl := n.tagLen()
-	if tl == 0 {
+	tl := n.tagLen() // 取标签长度
+	if tl == 0 { // 说明没有签
 		return ""
 	}
-	nl := n.nameLen()
-	hdr := (*stringHeader)(unsafe.Pointer(&s))
-	hdr.Data = unsafe.Pointer(n.data(3+nl+2, "non-empty string"))
-	hdr.Len = tl
+	nl := n.nameLen() // 取名称长度
+	hdr := (*stringHeader)(unsafe.Pointer(&s)) // 创建stringHeader对象
+	hdr.Data = unsafe.Pointer(n.data(3+nl+2, "non-empty string")) // 标签字符串地址
+	hdr.Len = tl // 设置长度
 	return s
 }
 
+/**
+ * 获取包路径信息
+ * @return 包路径信息
+ * @date 2020-03-19 09:41:30
+ **/
 func (n name) pkgPath() string {
+    // 第一个字节第三个位是0，说明没有包路径
 	if n.bytes == nil || *n.data(0, "name flag field")&(1<<2) == 0 {
 		return ""
 	}
+	// 求包路径的偏移量
 	off := 3 + n.nameLen()
 	if tl := n.tagLen(); tl > 0 {
 		off += 2 + tl
 	}
-	var nameOff int32
+	var nameOff int32 // 用于保存偏移量地址
+
+	// 请注意，该字段在内存中可能未对齐，因此在此我们不能使用直接的int32分配。
 	// Note that this field may not be aligned in memory,
 	// so we cannot use a direct int32 assignment here.
+	// 如果包路路径存在，则n.data最后四个字节表示包路径的偏移量地址，将最后四个字节取出，创建结构体，并且复制结构体
+	// Question: 原理是什么？
 	copy((*[4]byte)(unsafe.Pointer(&nameOff))[:], (*[4]byte)(unsafe.Pointer(n.data(off, "name offset field")))[:])
-	pkgPathName := name{(*byte)(resolveTypeOff(unsafe.Pointer(n.bytes), nameOff))}
-	return pkgPathName.name()
+	pkgPathName := name{(*byte)(resolveTypeOff(unsafe.Pointer(n.bytes), nameOff))} // 创建name结构体
+	return pkgPathName.name() // 最终获取包路径信息
 }
 
+/**
+ * 创建name结构体，并未设置包路径偏移量
+ * @param n 名称字
+ * @param taq 标签信息
+ * @param exported 是否可导出
+ * @return name结构体
+ * @date 2020-03-19 09:50:38
+ **/
 func newName(n, tag string, exported bool) name {
+    // 长度不能大于65535
 	if len(n) > 1<<16-1 {
 		panic("reflect.nameFrom: name too long: " + n)
 	}
+    // 长度不能大于65535
 	if len(tag) > 1<<16-1 {
 		panic("reflect.nameFrom: tag too long: " + tag)
 	}
 
-	var bits byte
-	l := 1 + 2 + len(n)
-	if exported {
+	var bits byte // 标记字段
+	l := 1 + 2 + len(n) // l用于记录数据长度
+	if exported { // 标记是否可导出
 		bits |= 1 << 0
 	}
-	if len(tag) > 0 {
+	if len(tag) > 0 { // 有标签数据
 		l += 2 + len(tag)
-		bits |= 1 << 1
+		bits |= 1 << 1 // 标记有标签
 	}
 
 	b := make([]byte, l)
-	b[0] = bits
-	b[1] = uint8(len(n) >> 8)
+	b[0] = bits // 设置位标记
+	b[1] = uint8(len(n) >> 8) // 设置名称长度
 	b[2] = uint8(len(n))
-	copy(b[3:], n)
-	if len(tag) > 0 {
+	copy(b[3:], n) // 拷贝名称数据
+	if len(tag) > 0 { // 有标签数据
 		tb := b[3+len(n):]
-		tb[0] = uint8(len(tag) >> 8)
+		tb[0] = uint8(len(tag) >> 8) // 设置标签长度
 		tb[1] = uint8(len(tag))
-		copy(tb[2:], tag)
+		copy(tb[2:], tag) // 拷贝标签数据
 	}
 
 	return name{bytes: &b[0]}
 }
 
-/*
+/**
  * The compiler knows the exact layout of all the data structures above.
  * The compiler does not know about the data structures and methods below.
+ * 编译器知道上面所有数据结构的确切布局。
+ * 编译器不了解以下数据结构和方法。
  */
 
 // Method represents a single method.
+/**
+ * Method表示一个方法类型
+ */
 type Method struct {
 	// Name is the method name.
 	// PkgPath is the package path that qualifies a lower case (unexported)
@@ -954,21 +985,31 @@ type Method struct {
 	// The combination of PkgPath and Name uniquely identifies a method
 	// in a method set.
 	// See https://golang.org/ref/spec#Uniqueness_of_identifiers
+	/**
+	 * Name是方法名称。
+     * PkgPath是包含小写（未导出）方法名称的程序包路径。大写（导出）的方法名称PkgPath为空。
+     * PkgPath和Name的组合唯一标识方法集中的方法。
+     * 参见https://golang.org/ref/spec#Uniqueness_of_identifiers
+	 */
 	Name    string
 	PkgPath string
 
-	Type  Type  // method type
-	Func  Value // func with receiver as first argument
-	Index int   // index for Type.Method
+	Type  Type  // method type // 方法类型
+	Func  Value // func with receiver as first argument // 以接收者为第一个参数的func
+	Index int   // index for Type.Method // Type.Method的索引
 }
 
 const (
-	kindDirectIface = 1 << 5
-	kindGCProg      = 1 << 6 // Type.gc points to GC program
-	kindMask        = (1 << 5) - 1
+	kindDirectIface = 1 << 5  // 0b00100000
+	kindGCProg      = 1 << 6 // Type.gc points to GC program // Type.gc指向GC程序 // 0b01000000
+	kindMask        = (1 << 5) - 1 // 0b00011111
 )
 
 // String returns the name of k.
+/**
+ * 字符串返回k的名称。
+ @return string k的名称字符串
+ */
 func (k Kind) String() string {
 	if int(k) < len(kindNames) {
 		return kindNames[k]
@@ -976,6 +1017,9 @@ func (k Kind) String() string {
 	return "kind" + strconv.Itoa(int(k))
 }
 
+/**
+ * 类型和名称映射
+ */
 var kindNames = []string{
 	Invalid:       "invalid",
 	Bool:          "bool",
