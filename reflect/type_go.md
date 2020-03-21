@@ -1049,14 +1049,25 @@ var kindNames = []string{
 	Struct:        "struct",
 	UnsafePointer: "unsafe.Pointer",
 }
-
+/**
+ * 获取类型上定义的所有方法，包括未导出的方法
+ * @return 类型上定义的所有方法
+ * @date 2020-03-20 08:37:57
+ **/
 func (t *uncommonType) methods() []method {
 	if t.mcount == 0 {
 		return nil
 	}
+	// 一个长度是65536个的数组，从中取指定位置的值
+	// 切片从0到第t.mcount-1位，长度为t.mcount，最大扩充项cap设置为t.mcount
 	return (*[1 << 16]method)(add(unsafe.Pointer(t), uintptr(t.moff), "t.mcount > 0"))[:t.mcount:t.mcount]
 }
 
+/**
+ * 获取类型上定义的所有导出的方法
+ * @return 类型上定义的所有导出的方法
+ * @date 2020-03-20 08:37:57
+ **/
 func (t *uncommonType) exportedMethods() []method {
 	if t.xcount == 0 {
 		return nil
@@ -1067,31 +1078,71 @@ func (t *uncommonType) exportedMethods() []method {
 // resolveNameOff resolves a name offset from a base pointer.
 // The (*rtype).nameOff method is a convenience wrapper for this function.
 // Implemented in the runtime package.
+/**
+ * resolveNameOff解析与名称基本指针的偏移量。 (*rtype).nameOff方法是此功能的便捷包装。在runtime包中实现。
+ * @param ptrInModule 模块中的指针对象
+ * @param off 偏移量
+ * @return 计算后的打针对象
+ * @date 2020-03-20 08:46:29
+ **/
 func resolveNameOff(ptrInModule unsafe.Pointer, off int32) unsafe.Pointer
 
 // resolveTypeOff resolves an *rtype offset from a base type.
 // The (*rtype).typeOff method is a convenience wrapper for this function.
 // Implemented in the runtime package.
+/**
+ * resolveTypeOff解析*rtype与基本类型的偏移量。(*rtype).typeOff方法是此函数的便捷包装。在runtime包中实现。
+ * @param 类型的指针
+ * @param 偏移量
+ * @return 计算后的类型指针
+ * @date 2020-03-20 08:49:12
+ **/
 func resolveTypeOff(rtype unsafe.Pointer, off int32) unsafe.Pointer
 
 // resolveTextOff resolves a function pointer offset from a base type.
 // The (*rtype).textOff method is a convenience wrapper for this function.
 // Implemented in the runtime package.
+/**
+ * resolveTextOff解析函数指针与基本类型的偏移量。(*rtype).textOff方法是此函数的便捷包装。在runtime包中实现。
+ * @param 类型的指针
+ * @param 偏移量
+ * @return 计算后的类型指针
+ * @date 2020-03-20 08:49:12
+ **/
 func resolveTextOff(rtype unsafe.Pointer, off int32) unsafe.Pointer
 
 // addReflectOff adds a pointer to the reflection lookup map in the runtime.
 // It returns a new ID that can be used as a typeOff or textOff, and will
 // be resolved correctly. Implemented in the runtime package.
+/**
+ * addReflectOff在运行时中将一个指针添加到反射查找map。返回一个新的ID，该ID可以用作typeOff或textOff，并且可以正确解析。在运行时包中实现。
+ * @param 指针
+ * @param 偏移量
+ * @return 新的ID
+ * @date 2020-03-20 08:49:12
+ **/
 func addReflectOff(ptr unsafe.Pointer) int32
 
 // resolveReflectType adds a name to the reflection lookup map in the runtime.
 // It returns a new nameOff that can be used to refer to the pointer.
+/**
+ * resolveReflectType在运行时为反射查找map添加名称。它返回一个新的nameOff，可以用来引用该指针。
+ * @param n 名称
+ * @return 新的nameOff
+ * @date 2020-03-20 08:54:31
+ **/
 func resolveReflectName(n name) nameOff {
 	return nameOff(addReflectOff(unsafe.Pointer(n.bytes)))
 }
 
 // resolveReflectType adds a *rtype to the reflection lookup map in the runtime.
 // It returns a new typeOff that can be used to refer to the pointer.
+/**
+ * resolveReflectType在运行时将*rtype添加到反射查找map中。它返回一个新的typeOff，可以用来引用该指针。
+ * @param t 类型
+ * @return 新的typeOff
+ * @date 2020-03-20 08:55:32
+ **/
 func resolveReflectType(t *rtype) typeOff {
 	return typeOff(addReflectOff(unsafe.Pointer(t)))
 }
@@ -1099,30 +1150,60 @@ func resolveReflectType(t *rtype) typeOff {
 // resolveReflectText adds a function pointer to the reflection lookup map in
 // the runtime. It returns a new textOff that can be used to refer to the
 // pointer.
+/**
+ * resolveReflectText将函数指针添加到反射查找map中，运行时。它返回一个新的textOff，可以用来引用该指针。
+ * @param ptr 指针
+ * @return 新的textOff
+ * @return
+ * @date 2020-03-20 08:57:01
+ **/
 func resolveReflectText(ptr unsafe.Pointer) textOff {
 	return textOff(addReflectOff(ptr))
 }
 
-type nameOff int32 // offset to a name
-type typeOff int32 // offset to an *rtype
-type textOff int32 // offset from top of text section
+type nameOff int32 // offset to a name      // 到一个name的偏移量
+type typeOff int32 // offset to an *rtype   // 到*rtype的偏移量
+type textOff int32 // offset from top of text section // 与文字部分顶部的偏移量
 
+/**
+ * 根据nameOff创建name实体
+ * @param off 到一个name的偏移量
+ * @return name对象
+ * @date 2020-03-20 08:59:24
+ **/
 func (t *rtype) nameOff(off nameOff) name {
 	return name{(*byte)(resolveNameOff(unsafe.Pointer(t), int32(off)))}
 }
-
+/**
+ * 根据typeOff创建rtype结构体指针
+ * @param 到*rtype的偏移量
+ * @return rtype的指针
+ * @date 2020-03-20 09:00:10
+ **/
 func (t *rtype) typeOff(off typeOff) *rtype {
 	return (*rtype)(resolveTypeOff(unsafe.Pointer(t), int32(off)))
 }
 
+/**
+ * 根据textOff指针结构体实例
+ * @param 与文字部分顶部的偏移量
+ * @return 指针结构体实例
+ * @date 2020-03-20 09:02:56
+ **/
 func (t *rtype) textOff(off textOff) unsafe.Pointer {
 	return resolveTextOff(unsafe.Pointer(t), int32(off))
 }
-
+/**
+ * 求rtype的uncommonType，返回是uncommonType指针
+ * @return uncommonType指针
+ * @date 2020-03-20 09:33:28
+ **/
 func (t *rtype) uncommon() *uncommonType {
-	if t.tflag&tflagUncommon == 0 {
+	if t.tflag&tflagUncommon == 0 { // uncommonType不存在
 		return nil
 	}
+
+	// 根据不同的类型，创建对应的xxxTypeUncommon，返回其uncommonType类型指针
 	switch t.Kind() {
 	case Struct:
 		return &(*structTypeUncommon)(unsafe.Pointer(t)).u
@@ -1177,24 +1258,44 @@ func (t *rtype) uncommon() *uncommonType {
 	}
 }
 
+/**
+ * 获取rtype类型的字符表示
+ * @return type类型的字符表示
+ * @date 2020-03-20 09:39:55
+ **/
 func (t *rtype) String() string {
 	s := t.nameOff(t.str).name()
-	if t.tflag&tflagExtraStar != 0 {
+	if t.tflag&tflagExtraStar != 0 { // 有额外的*号前缀
 		return s[1:]
 	}
 	return s
 }
 
+/**
+ * 获取rtype类型的size属性值
+ * @return size属性值
+ * @date 2020-03-20 09:41:46
+ **/
 func (t *rtype) Size() uintptr { return t.size }
-
+/**
+ * rtype所代表的数据值，在内存中表示需要的位数，只能求数值类型的，非数值类型会引起panic
+ * @param
+ * @param
+ * @return
+ * @return
+ * @date 2020-03-20 09:43:37
+ **/
 func (t *rtype) Bits() int {
-	if t == nil {
+	if t == nil { // 类型不能为空
 		panic("reflect: Bits of nil Type")
 	}
+	// 不能是非数值类型
 	k := t.Kind()
 	if k < Int || k > Complex128 {
 		panic("reflect: Bits of non-arithmetic Type " + t.String())
 	}
+
+    // 求位数
 	return int(t.size) * 8
 }
 
@@ -1208,6 +1309,11 @@ func (t *rtype) pointers() bool { return t.ptrdata != 0 }
 
 func (t *rtype) common() *rtype { return t }
 
+/**
+ * 求rtype的代表的值的导出方法，有uncommonType才可能有导出类型
+ * @return 导出方法
+ * @date 2020-03-20 09:50:20
+ **/
 func (t *rtype) exportedMethods() []method {
 	ut := t.uncommon()
 	if ut == nil {
@@ -1216,6 +1322,11 @@ func (t *rtype) exportedMethods() []method {
 	return ut.exportedMethods()
 }
 
+/**
+ * 求rtype的代表的值的导出方法数
+ * @return 导出方法数
+ * @date 2020-03-20 09:58:24
+ **/
 func (t *rtype) NumMethod() int {
 	if t.Kind() == Interface {
 		tt := (*interfaceType)(unsafe.Pointer(t))
@@ -1223,8 +1334,14 @@ func (t *rtype) NumMethod() int {
 	}
 	return len(t.exportedMethods())
 }
-
+/**
+ * 求导出方法中的第i个方法
+ * @param i 第i个方法，0开始计数
+ * @return 方法结构体实例
+ * @date 2020-03-20 10:14:22
+ **/
 func (t *rtype) Method(i int) (m Method) {
+    // 接口类型
 	if t.Kind() == Interface {
 		tt := (*interfaceType)(unsafe.Pointer(t))
 		return tt.Method(i)
