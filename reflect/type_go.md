@@ -1346,45 +1346,62 @@ func (t *rtype) Method(i int) (m Method) {
 		tt := (*interfaceType)(unsafe.Pointer(t))
 		return tt.Method(i)
 	}
+
+	// 非接口类型
 	methods := t.exportedMethods()
 	if i < 0 || i >= len(methods) {
 		panic("reflect: Method index out of range")
 	}
 	p := methods[i]
-	pname := t.nameOff(p.name)
+	pname := t.nameOff(p.name) // 根据nameOff创建name实例
 	m.Name = pname.name()
+
 	fl := flag(Func)
-	mtyp := t.typeOff(p.mtyp)
-	ft := (*funcType)(unsafe.Pointer(mtyp))
+	mtyp := t.typeOff(p.mtyp) // 根据typeOff创建rtype结构体，并反回指针
+	ft := (*funcType)(unsafe.Pointer(mtyp)) // 获取方法类型
+
 	in := make([]Type, 0, 1+len(ft.in()))
-	in = append(in, t)
-	for _, arg := range ft.in() {
+	in = append(in, t) // 方法的第一个入参表示方法的接收者
+	for _, arg := range ft.in() { // 添加入参
 		in = append(in, arg)
 	}
 	out := make([]Type, 0, len(ft.out()))
-	for _, ret := range ft.out() {
+	for _, ret := range ft.out() { // 添加出参
 		out = append(out, ret)
 	}
-	mt := FuncOf(in, out, ft.IsVariadic())
-	m.Type = mt
-	tfn := t.textOff(p.tfn)
-	fn := unsafe.Pointer(&tfn)
-	m.Func = Value{mt.(*rtype), fn, fl}
 
-	m.Index = i
+	// FuncOf返回具有给定参数和结果类型的函数类型。
+	mt := FuncOf(in, out, ft.IsVariadic())
+	m.Type = mt // 设置方法类型
+	tfn := t.textOff(p.tfn) // 求函数的textOff
+	fn := unsafe.Pointer(&tfn)
+	m.Func = Value{mt.(*rtype), fn, fl} // 设置方法值，可使用此值调用方法
+
+	m.Index = i // 设置是第几个方法
 	return m
 }
 
+/**
+ * 根据名称查找导出的方法
+ * @param name 方法名
+ * @return m 找到的方法
+ * @return ok true: 找到方法
+ * @date 2020-03-21 11:21:50
+ **/
 func (t *rtype) MethodByName(name string) (m Method, ok bool) {
+    // 接口类型
 	if t.Kind() == Interface {
 		tt := (*interfaceType)(unsafe.Pointer(t))
 		return tt.MethodByName(name)
 	}
+
+	// 非接口类型
 	ut := t.uncommon()
 	if ut == nil {
 		return Method{}, false
 	}
 	// TODO(mdempsky): Binary search.
+	// 根据名称找到对应的方法索引，再根据索引找到对应的方法
 	for i, p := range ut.exportedMethods() {
 		if t.nameOff(p.name).name() == name {
 			return t.Method(i), true
@@ -1393,6 +1410,11 @@ func (t *rtype) MethodByName(name string) (m Method, ok bool) {
 	return Method{}, false
 }
 
+/**
+ * 获取包路径信息，没有返回""
+ * @return 包路径信息，没有返回""
+ * @date 2020-03-21 11:25:34
+ **/
 func (t *rtype) PkgPath() string {
 	if t.tflag&tflagNamed == 0 {
 		return ""
@@ -1404,22 +1426,37 @@ func (t *rtype) PkgPath() string {
 	return t.nameOff(ut.pkgPath).name()
 }
 
+/**
+ * 类型是否有名称
+ * @return 类型是否有名称。true: 是
+ * @date 2020-03-21 11:26:48
+ **/
 func (t *rtype) hasName() bool {
 	return t.tflag&tflagNamed != 0
 }
 
+/**
+ * 获取类型的名称
+ * @return 类型的名称
+ * @date 2020-03-21 11:28:20 
+ **/
 func (t *rtype) Name() string {
 	if !t.hasName() {
 		return ""
 	}
 	s := t.String()
 	i := len(s) - 1
-	for i >= 0 && s[i] != '.' {
+	for i >= 0 && s[i] != '.' { // 找最后的一个.号的位置
 		i--
 	}
 	return s[i+1:]
 }
 
+/**
+ * 获取类型的通道类型，如果不是通道类型，引起panic
+ * @return 通道类型
+ * @date 2020-03-21 11:29:24 
+ **/
 func (t *rtype) ChanDir() ChanDir {
 	if t.Kind() != Chan {
 		panic("reflect: ChanDir of non-chan type " + t.String())
@@ -1428,14 +1465,24 @@ func (t *rtype) ChanDir() ChanDir {
 	return ChanDir(tt.dir)
 }
 
+/**
+ * 是否有可变参数，如要不是Func类型，引起panic
+ * @return true: 有可变参数类型
+ * @date 2020-03-21 11:31:13 
+ **/
 func (t *rtype) IsVariadic() bool {
 	if t.Kind() != Func {
 		panic("reflect: IsVariadic of non-func type " + t.String())
 	}
 	tt := (*funcType)(unsafe.Pointer(t))
-	return tt.outCount&(1<<15) != 0
+	return tt.outCount&(1<<15) != 0 // outCount最高位为1说明有可变参数
 }
 
+/**
+ * 获取元素类型，此方法只对Array, Chan, Map, Ptr, Slice类型有效，其他类型返回Panic
+ * @return 元素类型
+ * @date 2020-03-21 11:33:37 
+ **/
 func (t *rtype) Elem() Type {
 	switch t.Kind() {
 	case Array:
@@ -1457,6 +1504,12 @@ func (t *rtype) Elem() Type {
 	panic("reflect: Elem of invalid type " + t.String())
 }
 
+/**
+ * 获取第i个属性，非结构体类型会引起panic
+ * @param 第i个属性
+ * @return 结构体属性实例
+ * @date 2020-03-21 11:35:14 
+ **/
 func (t *rtype) Field(i int) StructField {
 	if t.Kind() != Struct {
 		panic("reflect: Field of non-struct type " + t.String())
@@ -1465,6 +1518,12 @@ func (t *rtype) Field(i int) StructField {
 	return tt.Field(i)
 }
 
+/**
+ * 获取属性，参数表示层次关系，非结构体类型会引起panic
+ * @param 属性位置切片
+ * @return 结构体属性实例
+ * @date 2020-03-21 11:35:14 
+ **/
 func (t *rtype) FieldByIndex(index []int) StructField {
 	if t.Kind() != Struct {
 		panic("reflect: FieldByIndex of non-struct type " + t.String())
@@ -1472,7 +1531,13 @@ func (t *rtype) FieldByIndex(index []int) StructField {
 	tt := (*structType)(unsafe.Pointer(t))
 	return tt.FieldByIndex(index)
 }
-
+/**
+ * 根据名称找到对应的属性
+ * @param 属性名
+ * @return 结构体属性实例
+ * @return true: 找到
+ * @date 2020-03-21 11:39:00 
+ **/
 func (t *rtype) FieldByName(name string) (StructField, bool) {
 	if t.Kind() != Struct {
 		panic("reflect: FieldByName of non-struct type " + t.String())
@@ -1481,6 +1546,13 @@ func (t *rtype) FieldByName(name string) (StructField, bool) {
 	return tt.FieldByName(name)
 }
 
+/**
+ * 根据匹配函数找到对应的属性
+ * @param 匹配函数
+ * @return 结构体属性实例
+ * @return true: 找到
+ * @date 2020-03-21 11:39:00 
+ **/
 func (t *rtype) FieldByNameFunc(match func(string) bool) (StructField, bool) {
 	if t.Kind() != Struct {
 		panic("reflect: FieldByNameFunc of non-struct type " + t.String())
@@ -1488,7 +1560,12 @@ func (t *rtype) FieldByNameFunc(match func(string) bool) (StructField, bool) {
 	tt := (*structType)(unsafe.Pointer(t))
 	return tt.FieldByNameFunc(match)
 }
-
+/**
+ * 方法的第i个入参的类型
+ * @param 第i个入参
+ * @return 第i个入参的类型
+ * @date 2020-03-21 11:43:56 
+ **/
 func (t *rtype) In(i int) Type {
 	if t.Kind() != Func {
 		panic("reflect: In of non-func type " + t.String())
@@ -1497,6 +1574,11 @@ func (t *rtype) In(i int) Type {
 	return toType(tt.in()[i])
 }
 
+/**
+ * Map的key类型
+ * @return Map的key类型
+ * @date 2020-03-21 11:44:36 
+ **/
 func (t *rtype) Key() Type {
 	if t.Kind() != Map {
 		panic("reflect: Key of non-map type " + t.String())
@@ -1505,6 +1587,11 @@ func (t *rtype) Key() Type {
 	return toType(tt.key)
 }
 
+/**
+ * 获取数组长度
+ * @return 数组长度
+ * @date 2020-03-21 11:46:22
+ **/
 func (t *rtype) Len() int {
 	if t.Kind() != Array {
 		panic("reflect: Len of non-array type " + t.String())
@@ -1513,6 +1600,11 @@ func (t *rtype) Len() int {
 	return int(tt.len)
 }
 
+/**
+ * 结构的字段数目
+ * @return 结构的字段数目
+ * @date 2020-03-21 11:47:34
+ **/
 func (t *rtype) NumField() int {
 	if t.Kind() != Struct {
 		panic("reflect: NumField of non-struct type " + t.String())
@@ -1521,6 +1613,11 @@ func (t *rtype) NumField() int {
 	return len(tt.fields)
 }
 
+/**
+ * 方法的入参个数
+ * @return
+ * @date 2020-03-21 11:48:04
+ **/
 func (t *rtype) NumIn() int {
 	if t.Kind() != Func {
 		panic("reflect: NumIn of non-func type " + t.String())
@@ -1529,6 +1626,11 @@ func (t *rtype) NumIn() int {
 	return int(tt.inCount)
 }
 
+/**
+ * 方法的出参个数
+ * @return 方法的出参个数
+ * @date 2020-03-21 11:48:21
+ **/
 func (t *rtype) NumOut() int {
 	if t.Kind() != Func {
 		panic("reflect: NumOut of non-func type " + t.String())
@@ -1537,6 +1639,12 @@ func (t *rtype) NumOut() int {
 	return len(tt.out())
 }
 
+/**
+ * 方法的第i个出参
+ * @param 第i个出参
+ * @return 第i个出参类型
+ * @date 2020-03-21 11:48:43
+ **/
 func (t *rtype) Out(i int) Type {
 	if t.Kind() != Func {
 		panic("reflect: Out of non-func type " + t.String())
@@ -1544,23 +1652,34 @@ func (t *rtype) Out(i int) Type {
 	tt := (*funcType)(unsafe.Pointer(t))
 	return toType(tt.out()[i])
 }
-
+/**
+ * 所有的入参
+ * @return 所有的入参
+ * @date 2020-03-21 11:49:56
+ **/
 func (t *funcType) in() []*rtype {
 	uadd := unsafe.Sizeof(*t)
 	if t.tflag&tflagUncommon != 0 {
 		uadd += unsafe.Sizeof(uncommonType{})
 	}
+	// 这里可以提到前面
 	if t.inCount == 0 {
 		return nil
 	}
 	return (*[1 << 20]*rtype)(add(unsafe.Pointer(t), uadd, "t.inCount > 0"))[:t.inCount:t.inCount]
 }
 
+/**
+ * 所有的出参
+ * @return
+ * @date 2020-03-21 11:50:19
+ **/
 func (t *funcType) out() []*rtype {
 	uadd := unsafe.Sizeof(*t)
 	if t.tflag&tflagUncommon != 0 {
 		uadd += unsafe.Sizeof(uncommonType{})
 	}
+	// 判断可以提前
 	outCount := t.outCount & (1<<15 - 1)
 	if outCount == 0 {
 		return nil
@@ -1575,10 +1694,28 @@ func (t *funcType) out() []*rtype {
 // record why the addition is safe, which is to say why the addition
 // does not cause x to advance to the very end of p's allocation
 // and therefore point incorrectly at the next block in memory.
+/**
+ * add返回p + x。
+ *
+ * whySafe字符串将被忽略，因此该函数仍然可以像p+x一样有效地内联，
+ * 但是所有调用站点都应使用该字符串来记录为什么加法是安全的，
+ * 也就是说加法为何不会导致x提前到p分配的末尾，因此而错误地指向了内存中的下一个块。
+ * @param p 指针类型
+ * @param x 偏移量
+ * @param whySafe 提示字符串
+ * @return 新的指针类型
+ * @return
+ * @date 2020-03-21 14:40:58
+ **/
 func add(p unsafe.Pointer, x uintptr, whySafe string) unsafe.Pointer {
 	return unsafe.Pointer(uintptr(p) + x)
 }
 
+/**
+ * 通道方向字符串描述
+ * @return 通道方向字符串描述
+ * @date 2020-03-21 14:42:43
+ **/
 func (d ChanDir) String() string {
 	switch d {
 	case SendDir:
@@ -1592,25 +1729,35 @@ func (d ChanDir) String() string {
 }
 
 // Method returns the i'th method in the type's method set.
+/**
+ * 方法返回类型的方法集中的第i个方法。
+ * @return 方法集中的第i个方法
+ * @date 2020-03-21 14:43:31
+ **/
 func (t *interfaceType) Method(i int) (m Method) {
-	if i < 0 || i >= len(t.methods) {
+	if i < 0 || i >= len(t.methods) { //
 		return
 	}
 	p := &t.methods[i]
 	pname := t.nameOff(p.name)
-	m.Name = pname.name()
-	if !pname.isExported() {
+	m.Name = pname.name() // 设置方法名
+	if !pname.isExported() { // 如果方法是可导出的，则设置方法名
 		m.PkgPath = pname.pkgPath()
-		if m.PkgPath == "" {
+		if m.PkgPath == "" { // pname上的名称可能为空，则取接口类型上的包名
 			m.PkgPath = t.pkgPath.name()
 		}
 	}
-	m.Type = toType(t.typeOff(p.typ))
-	m.Index = i
+	m.Type = toType(t.typeOff(p.typ)) // 设置方法的type类类型
+	m.Index = i // 设置是接口的第i个方法
 	return
 }
 
 // NumMethod returns the number of interface methods in the type's method set.
+/**
+ * NumMethod返回类型的方法集中的接口方法的数量。
+ * @return 方法集中的接口方法的数量
+ * @date 2020-03-21 14:52:34
+ **/
 func (t *interfaceType) NumMethod() int { return len(t.methods) }
 
 // MethodByName method with the given name in the type's method set.
@@ -1629,18 +1776,41 @@ func (t *interfaceType) MethodByName(name string) (m Method, ok bool) {
 }
 
 // A StructField describes a single field in a struct.
+/**
+ * StructField描述结构中的单个字段。
+ */
 type StructField struct {
 	// Name is the field name.
+	// 字段名称
 	Name string
 	// PkgPath is the package path that qualifies a lower case (unexported)
 	// field name. It is empty for upper case (exported) field names.
 	// See https://golang.org/ref/spec#Uniqueness_of_identifiers
+	/**
+	 * PkgPath是限定小写（未导出）字段名称的程序包路径。大写（导出）字段名称为空。
+     * 参见https://golang.org/ref/spec#Uniqueness_of_identifiers
+	 */
 	PkgPath string
 
+    /**
+     * 字段类型
+     */
 	Type      Type      // field type
+	/**
+	 * 标签信息
+	 */
 	Tag       StructTag // field tag string
+	/**
+	 * 结构体中的偏移量（以字节为单位）
+	 */
 	Offset    uintptr   // offset within struct, in bytes
+	/**
+	 * Type.FieldByIndex的索引序列
+	 */
 	Index     []int     // index sequence for Type.FieldByIndex
+	/**
+	 * 是否是内嵌字段
+	 */
 	Anonymous bool      // is an embedded field
 }
 
@@ -1652,6 +1822,13 @@ type StructField struct {
 // characters other than space (U+0020 ' '), quote (U+0022 '"'),
 // and colon (U+003A ':').  Each value is quoted using U+0022 '"'
 // characters and Go string literal syntax.
+/**
+ * StructTag是struct字段中的标签字符串。
+ *
+ * 按照惯例，标签字符串是由空格分隔的key:"value"对组成的串联。
+ * 每个key都是非空字符串，由非控制字符组成，除了空格（U+0020 ' '），引号（U+0022 '"'）
+ * 和冒号（U+003A ':'）。每个值使用U+0022 '"字符和Go字符串文字语法引用。
+ */
 type StructTag string
 
 // Get returns the value associated with key in the tag string.
@@ -1659,6 +1836,12 @@ type StructTag string
 // If the tag does not have the conventional format, the value
 // returned by Get is unspecified. To determine whether a tag is
 // explicitly set to the empty string, use Lookup.
+/**
+ * Get返回与标签字符串中的key关联的值。
+ * 如果标签中没有这样的键，则Get返回空字符串。
+ * 如果标记不具有常规格式，则未指定Get返回的值。
+ * 若要确定是否将标记明确设置为空字符串，请使用Lookup。
+ */
 func (tag StructTag) Get(key string) string {
 	v, _ := tag.Lookup(key)
 	return v
@@ -1670,12 +1853,22 @@ func (tag StructTag) Get(key string) string {
 // The ok return value reports whether the value was explicitly set in
 // the tag string. If the tag does not have the conventional format,
 // the value returned by Lookup is unspecified.
+/**
+ * 标签格式 ： `a:"b",c:"d",e:"f"`
+ * 查找返回与标签字符串中的键关联的值。
+ * 如果关键字存在于标签中，则返回值（可能为空）。否则，返回值将为空字符串。
+ * ok返回值报告该值是否在标记字符串中显式设置。如果标记不具有常规格式，则未指定Lookup返回的值。
+ */
 func (tag StructTag) Lookup(key string) (value string, ok bool) {
 	// When modifying this code, also update the validateStructTag code
 	// in cmd/vet/structtag.go.
+	/**
+	 * 修改此代码时，还请更新cmd/vet/structtag.go中的validateStructTag代码。
+	 */
 
 	for tag != "" {
 		// Skip leading space.
+		// 忽略前导空格
 		i := 0
 		for i < len(tag) && tag[i] == ' ' {
 			i++
@@ -1689,19 +1882,26 @@ func (tag StructTag) Lookup(key string) (value string, ok bool) {
 		// Strictly speaking, control chars include the range [0x7f, 0x9f], not just
 		// [0x00, 0x1f], but in practice, we ignore the multi-byte control characters
 		// as it is simpler to inspect the tag's bytes than the tag's runes.
+		// 扫描到冒号。空格，引号或控制字符是语法错误。
+        // 严格来说，控制字符包括范围[0x7f，0x9f]，而不仅仅是
+        // [0x00，0x1f]，但实际上，我们忽略了多字节控制字符
+        // 因为检查标记的字节比标记的符文更简单。
 		i = 0
 		for i < len(tag) && tag[i] > ' ' && tag[i] != ':' && tag[i] != '"' && tag[i] != 0x7f {
 			i++
 		}
+
+		// 没找到或者格式不合法的情况
 		if i == 0 || i+1 >= len(tag) || tag[i] != ':' || tag[i+1] != '"' {
 			break
 		}
-		name := string(tag[:i])
-		tag = tag[i+1:]
+		name := string(tag[:i]) // 标签名
+		tag = tag[i+1:] // 标签值开始的切片
 
 		// Scan quoted string to find value.
+		// Scan quoted string to find value.
 		i = 1
-		for i < len(tag) && tag[i] != '"' {
+		for i < len(tag) && tag[i] != '"' { // 在不越界的情况下，直到第一个非转义"为止
 			if tag[i] == '\\' {
 				i++
 			}
@@ -1710,11 +1910,11 @@ func (tag StructTag) Lookup(key string) (value string, ok bool) {
 		if i >= len(tag) {
 			break
 		}
-		qvalue := string(tag[:i+1])
+		qvalue := string(tag[:i+1]) // 双引号引起的字符串
 		tag = tag[i+1:]
 
-		if key == name {
-			value, err := strconv.Unquote(qvalue)
+		if key == name { // 名称相等的情况下
+			value, err := strconv.Unquote(qvalue) // 去掉引号后的字符串
 			if err != nil {
 				break
 			}
@@ -1725,21 +1925,25 @@ func (tag StructTag) Lookup(key string) (value string, ok bool) {
 }
 
 // Field returns the i'th struct field.
+/**
+ * Field返回第i个struct字段。
+ */
 func (t *structType) Field(i int) (f StructField) {
-	if i < 0 || i >= len(t.fields) {
+	if i < 0 || i >= len(t.fields) { // 不存在第i个字段
 		panic("reflect: Field index out of bounds")
 	}
+
 	p := &t.fields[i]
-	f.Type = toType(p.typ)
-	f.Name = p.name.name()
-	f.Anonymous = p.embedded()
-	if !p.name.isExported() {
+	f.Type = toType(p.typ) // 设置字段类型
+	f.Name = p.name.name() // 设置字段名
+	f.Anonymous = p.embedded() // 设置是否内嵌字段
+	if !p.name.isExported() { // 非导出字段要设置包名
 		f.PkgPath = t.pkgPath.name()
 	}
-	if tag := p.name.tag(); tag != "" {
+	if tag := p.name.tag(); tag != "" { // 存在标签就设置标签
 		f.Tag = StructTag(tag)
 	}
-	f.Offset = p.offset()
+	f.Offset = p.offset() // 设置偏移量
 
 	// NOTE(rsc): This is the only allocation in the interface
 	// presented by a reflect.Type. It would be nice to avoid,
@@ -1748,20 +1952,30 @@ func (t *structType) Field(i int) (f StructField) {
 	// uses of reflect. One possibility is CL 5371098, but we
 	// postponed that ugliness until there is a demonstrated
 	// need for the performance. This is issue 2320.
-	f.Index = []int{i}
+	// NOTE（rsc）：这是reflect.Type在接口中提供的唯一分配。
+	// 至少在通常情况下，最好避免这样做，但是我们需要确保行为不当的反射
+	// 客户不会影响反射的其他用途。 一种可能是CL 5371098，但我们推迟了
+	// 这种丑陋，直到表现出对性能的需求为止。 issue 2320。
+	f.Index = []int{i} // 设置索引
 	return
 }
 
 // TODO(gri): Should there be an error/bool indicator if the index
 //            is wrong for FieldByIndex?
+// TODO(gri): 如果FieldByIndex的索引错误，是否应该有一个错误/布尔指示器？
 
 // FieldByIndex returns the nested field corresponding to index.
+/**
+ * FieldByIndex返回与索引对应的嵌套字段。
+ * @param index 索引数组
+ * @return 与索引对应的嵌套字段
+ */
 func (t *structType) FieldByIndex(index []int) (f StructField) {
 	f.Type = toType(&t.rtype)
-	for i, x := range index {
+	for i, x := range index { // 遍历索引
 		if i > 0 {
 			ft := f.Type
-			if ft.Kind() == Ptr && ft.Elem().Kind() == Struct {
+			if ft.Kind() == Ptr && ft.Elem().Kind() == Struct { // 结构体指针类型特殊处理
 				ft = ft.Elem()
 			}
 			f.Type = ft
@@ -1772,22 +1986,41 @@ func (t *structType) FieldByIndex(index []int) (f StructField) {
 }
 
 // A fieldScan represents an item on the fieldByNameFunc scan work list.
+/**
+ * fieldScan代表fieldByNameFunc扫描工作列表上的条目。
+ */
 type fieldScan struct {
-	typ   *structType
-	index []int
+	typ   *structType // 结构体类型
+	index []int // 索引数组
 }
 
 // FieldByNameFunc returns the struct field with a name that satisfies the
 // match function and a boolean to indicate if the field was found.
+/**
+ * FieldByNameFunc返回具有满足match函数名称的struct字段和一个布尔值，以指示是否找到了该字段。
+ * @param match 匹配函数
+ * @return result 结构体字段
+ * @return 是否找到，true: 是
+ * @date 2020-03-21 16:22:31 
+ **/
 func (t *structType) FieldByNameFunc(match func(string) bool) (result StructField, ok bool) {
 	// This uses the same condition that the Go language does: there must be a unique instance
 	// of the match at a given depth level. If there are multiple instances of a match at the
 	// same depth, they annihilate each other and inhibit any possible match at a lower level.
 	// The algorithm is breadth first search, one depth level at a time.
+    /**
+     * 这使用了与Go语言相同的条件：在给定的深度级别，必须有唯一的匹配实例。
+     * 如果在同一深度有多个匹配的实例，它们将相消灭制并在较低级别禁止任何可能的匹配。
+     * 该算法是广度优先搜索，一次一个深度级别。
+     */
 
 	// The current and next slices are work queues:
 	// current lists the fields to visit on this depth level,
 	// and next lists the fields on the next lower level.
+	/**
+	 * 当前和下一个切片是工作队列：
+     * 当前列出了在此深度级别上要访问的字段，下一个列出了下一个较低级别的字段。
+	 */
 	current := []fieldScan{}
 	next := []fieldScan{{typ: t}}
 
@@ -1797,6 +2030,11 @@ func (t *structType) FieldByNameFunc(match func(string) bool) (result StructFiel
 	// If a struct type T can be reached more than once at a given depth level,
 	// then it annihilates itself and need not be considered at all when we
 	// process that next depth level.
+	/**
+	 * nextCount记录遇到嵌入式类型并考虑在“下一个”切片中进行排队的次数。
+	 * 我们只将第一个入队列，但是我们增加每个的计数。 如果在给定的深度级别可以多次到达结构类型T，
+	 * 那么它将消灭自身，并且在我们处理下一个深度级别时完全不需要考虑。
+	 */
 	var nextCount map[*structType]int
 
 	// visited records the structs that have been considered already.
@@ -1804,10 +2042,16 @@ func (t *structType) FieldByNameFunc(match func(string) bool) (result StructFiel
 	// reachable embedded types; visited avoids following those cycles.
 	// It also avoids duplicated effort: if we didn't find the field in an
 	// embedded type T at level 2, we won't find it in one at level 4 either.
+	/**
+	 * 访问记录了已经考虑过的结构。
+     * 嵌入式指针字段可以在可到达的嵌入式类型图中创建循环； 来访者避免陷入这些循环。
+     * 这也避免了重复的工作：如果我们在第2级没有找到嵌入类型T中的字段，
+     * 那么在第4级也不会在一个类型中找到该字段。
+	 */
 	visited := map[*structType]bool{}
 
 	for len(next) > 0 {
-		current, next = next, current[:0]
+		current, next = next, current[:0] // current变成现在要处理的层，next再次记录下一层
 		count := nextCount
 		nextCount = nil
 
@@ -1815,22 +2059,33 @@ func (t *structType) FieldByNameFunc(match func(string) bool) (result StructFiel
 		// The loop queues embedded fields found in 'next', for processing during the next
 		// iteration. The multiplicity of the 'current' field counts is recorded
 		// in 'count'; the multiplicity of the 'next' field counts is recorded in 'nextCount'.
+        /**
+		* 处理此深度的所有字段，现在列在“current”中。
+        * 循环将'next'中找到的嵌入字段入队，以便在下一次迭代中进行处理。
+        * “current”字段计数的多重性记录在“count”中； “next”字段计数的多重性记录在“nextCount”中。
+		*/
 		for _, scan := range current {
 			t := scan.typ
 			if visited[t] {
 				// We've looked through this type before, at a higher level.
 				// That higher level would shadow the lower level we're now at,
 				// so this one can't be useful to us. Ignore it.
+                /**
+                 * 之前，我们已经在更高层次上处理了这种类型。
+                 * 较高的级别将掩盖我们现在所处的较低级别，因此这一级别对我们没有用。忽略它。
+                 */
 				continue
 			}
 			visited[t] = true
 			for i := range t.fields {
 				f := &t.fields[i]
 				// Find name and (for embedded field) type for field f.
+				// 查找字段f的名称和（对于嵌入式字段）类型。
 				fname := f.name.name()
 				var ntyp *rtype
 				if f.embedded() {
 					// Embedded field of type T or *T.
+					// 类型T或* T的嵌入式字段。
 					ntyp = f.typ
 					if ntyp.Kind() == Ptr {
 						ntyp = ntyp.Elem().common()
@@ -1838,13 +2093,16 @@ func (t *structType) FieldByNameFunc(match func(string) bool) (result StructFiel
 				}
 
 				// Does it match?
+				// 是否匹配
 				if match(fname) {
 					// Potential match
+					// 潜在匹配
 					if count[t] > 1 || ok {
 						// Name appeared multiple times at this level: annihilate.
+						// 在此级别上，名字多次出现：歼灭。
 						return StructField{}, false
 					}
-					result = t.Field(i)
+					result = t.Field(i) // 取属性，并且设置索引列表
 					result.Index = nil
 					result.Index = append(result.Index, scan.index...)
 					result.Index = append(result.Index, i)
@@ -1855,20 +2113,27 @@ func (t *structType) FieldByNameFunc(match func(string) bool) (result StructFiel
 				// Queue embedded struct fields for processing with next level,
 				// but only if we haven't seen a match yet at this level and only
 				// if the embedded types haven't already been queued.
+				/**
+				 * 将嵌入的struct字段入队列，以进行下一级别的处理，但前提是我们尚未在此级别看到匹配项，
+				 * 并且仅当尚未对嵌入的类型进行入队列时。
+				 */
 				if ok || ntyp == nil || ntyp.Kind() != Struct {
 					continue
 				}
 				styp := (*structType)(unsafe.Pointer(ntyp))
 				if nextCount[styp] > 0 {
+				    // 已经现匹配过两次了，那就不需要再处理了
 					nextCount[styp] = 2 // exact multiple doesn't matter
 					continue
 				}
+
 				if nextCount == nil {
 					nextCount = map[*structType]int{}
 				}
-				nextCount[styp] = 1
-				if count[t] > 1 {
-					nextCount[styp] = 2 // exact multiple doesn't matter
+
+				nextCount[styp] = 1 // 本层已经见到过，下一层也要标记起来
+				if count[t] > 1 { // 本层见过多次，下层也要标记见过多次
+					nextCount[styp] = 2 // exact multiple doesn't matter  // 2就表示多次
 				}
 				var index []int
 				index = append(index, scan.index...)
