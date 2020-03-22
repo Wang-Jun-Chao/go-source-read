@@ -2150,8 +2150,12 @@ func (t *structType) FieldByNameFunc(match func(string) bool) (result StructFiel
 
 // FieldByName returns the struct field with the given name
 // and a boolean to indicate if the field was found.
+/**
+ * FieldByName返回具有给定名称的struct字段和一个布尔值，以指示是否找到了该字段。
+ */
 func (t *structType) FieldByName(name string) (f StructField, present bool) {
 	// Quick check for top-level name, or struct without embedded fields.
+	// 快速检查顶级名称或没有嵌入字段的结构。
 	hasEmbeds := false
 	if name != "" {
 		for i := range t.fields {
@@ -2167,37 +2171,55 @@ func (t *structType) FieldByName(name string) (f StructField, present bool) {
 	if !hasEmbeds {
 		return
 	}
+
+	// 有嵌入字段在这里进行处理
 	return t.FieldByNameFunc(func(s string) bool { return s == name })
 }
 
 // TypeOf returns the reflection Type that represents the dynamic type of i.
 // If i is a nil interface value, TypeOf returns nil.
+/**
+ * TypeOf返回表示i的动态类型的反射类型。如果i是nil接口值，则TypeOf返回nil。
+ **/
 func TypeOf(i interface{}) Type {
 	eface := *(*emptyInterface)(unsafe.Pointer(&i))
 	return toType(eface.typ)
 }
 
 // ptrMap is the cache for PtrTo.
+/**
+ * ptrMap是PtrTo的缓存。
+ */
 var ptrMap sync.Map // map[*rtype]*ptrType
 
 // PtrTo returns the pointer type with element t.
 // For example, if t represents type Foo, PtrTo(t) represents *Foo.
+/**
+ * PtrTo返回带有元素t的指针类型。例如，如果t表示类型Foo，则PtrTo(t)表示* Foo。
+ */
 func PtrTo(t Type) Type {
 	return t.(*rtype).ptrTo()
 }
 
+/**
+ * ptrTo返回带有元素t的指针类型。
+ */
 func (t *rtype) ptrTo() *rtype {
+    // 有ptrToThis，直接使用
 	if t.ptrToThis != 0 {
 		return t.typeOff(t.ptrToThis)
 	}
 
 	// Check the cache.
+	// 从缓存中取
 	if pi, ok := ptrMap.Load(t); ok {
 		return &pi.(*ptrType).rtype
 	}
 
 	// Look in known types.
+	// 查找已知类型。
 	s := "*" + t.String()
+	// typesByString返回typelinks()的子片段，其元素具有给定的字符串表示形式。
 	for _, tt := range typesByString(s) {
 		p := (*ptrType)(unsafe.Pointer(tt))
 		if p.elem != t {
@@ -2209,6 +2231,7 @@ func (t *rtype) ptrTo() *rtype {
 
 	// Create a new ptrType starting with the description
 	// of an *unsafe.Pointer.
+	// 从*unsafe.Pointer的描述开始创建一个新的ptrType。
 	var iptr interface{} = (*unsafe.Pointer)(nil)
 	prototype := *(**ptrType)(unsafe.Pointer(&iptr))
 	pp := *prototype
@@ -2221,6 +2244,8 @@ func (t *rtype) ptrTo() *rtype {
 	// Create a good hash for the new string by using
 	// the FNV-1 hash's mixing function to combine the
 	// old hash and the new "*".
+	// 对于链接到二进制文件中的类型结构，编译器提供了字符串的良好哈希。
+    // 通过使用FNV-1哈希的混合函数为旧字符串和新的“ *”组合，为新字符串创建良好的哈希。
 	pp.hash = fnv1(t.hash, '*')
 
 	pp.elem = t
@@ -2230,6 +2255,9 @@ func (t *rtype) ptrTo() *rtype {
 }
 
 // fnv1 incorporates the list of bytes into the hash x using the FNV-1 hash function.
+/**
+ * fnv1使用FNV-1哈希函数将字节列表合并到哈希x中。
+ */
 func fnv1(x uint32, list ...byte) uint32 {
 	for _, b := range list {
 		x = x*16777619 ^ uint32(b)
@@ -2237,6 +2265,9 @@ func fnv1(x uint32, list ...byte) uint32 {
 	return x
 }
 
+/**
+ * 当前类型是否实现接口u
+ */
 func (t *rtype) Implements(u Type) bool {
 	if u == nil {
 		panic("reflect: nil type passed to Type.Implements")
@@ -2247,6 +2278,9 @@ func (t *rtype) Implements(u Type) bool {
 	return implements(u.(*rtype), t)
 }
 
+/**
+ * 当前类型是否可赋值给类型u
+ */
 func (t *rtype) AssignableTo(u Type) bool {
 	if u == nil {
 		panic("reflect: nil type passed to Type.AssignableTo")
@@ -2255,6 +2289,9 @@ func (t *rtype) AssignableTo(u Type) bool {
 	return directlyAssignable(uu, t) || implements(uu, t)
 }
 
+/**
+ * 当前类型是否可转换成类型u
+ */
 func (t *rtype) ConvertibleTo(u Type) bool {
 	if u == nil {
 		panic("reflect: nil type passed to Type.ConvertibleTo")
@@ -2263,11 +2300,17 @@ func (t *rtype) ConvertibleTo(u Type) bool {
 	return convertOp(uu, t) != nil
 }
 
+/**
+ * 当前类型是否可比较
+ */
 func (t *rtype) Comparable() bool {
 	return t.equal != nil
 }
 
 // implements reports whether the type V implements the interface type T.
+/**
+ * 实现报告类型V是否实现接口类型T。
+ */
 func implements(T, V *rtype) bool {
 	if T.Kind() != Interface {
 		return false
@@ -2289,7 +2332,13 @@ func implements(T, V *rtype) bool {
 	// This lets us run the scan in overall linear time instead of
 	// the quadratic time  a naive search would require.
 	// See also ../runtime/iface.go.
-	if V.Kind() == Interface {
+	// 两种情况下都应用相同的算法，但是接口类型和具体类型的方法表不同，因此代码重复。
+	// 在这两种情况下，算法都是同时对两个列表（T方法和V方法）进行线性扫描。
+    // 由于方法表是以唯一的排序顺序存储的（字母顺序，没有重复的方法名称），
+    // 因此对V方法的扫描必须沿途对每个T方法进行匹配，否则V不会实现T。
+    // 这样，我们就可以在整个线性时间内（而不是天真的搜索所需的二次时间）运行扫描。
+    // 另请参阅../runtime/iface.go。
+	if V.Kind() == Interface { // V是接口类型
 		v := (*interfaceType)(unsafe.Pointer(V))
 		i := 0
 		for j := 0; j < len(v.methods); j++ {
@@ -2297,8 +2346,9 @@ func implements(T, V *rtype) bool {
 			tmName := t.nameOff(tm.name)
 			vm := &v.methods[j]
 			vmName := V.nameOff(vm.name)
+			// 名称必须相同，typeOff是同样的
 			if vmName.name() == tmName.name() && V.typeOff(vm.typ) == t.typeOff(tm.typ) {
-				if !tmName.isExported() {
+				if !tmName.isExported() { // 非导出类型还要比较包名
 					tmPkgPath := tmName.pkgPath()
 					if tmPkgPath == "" {
 						tmPkgPath = t.pkgPath.name()
@@ -2312,6 +2362,7 @@ func implements(T, V *rtype) bool {
 					}
 				}
 				if i++; i >= len(t.methods) {
+				    // 已经到了末尾
 					return true
 				}
 			}
@@ -2319,6 +2370,7 @@ func implements(T, V *rtype) bool {
 		return false
 	}
 
+    // V是非接口类型
 	v := V.uncommon()
 	if v == nil {
 		return false
@@ -2356,11 +2408,20 @@ func implements(T, V *rtype) bool {
 // can be directly assigned (using memmove) to another channel type T.
 // https://golang.org/doc/go_spec.html#Assignability
 // T and V must be both of Chan kind.
+/**
+ * specialChannelAssignability报告是否可以将通道类型V的值x直接（使用内存移动）分配给另一个通道类型T。
+ * https://golang.org/doc/go_spec.html#Assignability
+ * T和V必须都是Chan类型。
+ */
 func specialChannelAssignability(T, V *rtype) bool {
 	// Special case:
 	// x is a bidirectional channel value, T is a channel type,
 	// x's type V and T have identical element types,
 	// and at least one of V or T is not a defined type.
+	// 特殊情况：
+    // x是双向通道值，T是通道类型，
+    // x的类型V和T具有相同的元素类型，
+    // 并且V或T中的至少一个不是定义的类型。
 	return V.ChanDir() == BothDir && (T.Name() == "" || V.Name() == "") && haveIdenticalType(T.Elem(), V.Elem(), true)
 }
 
@@ -2369,23 +2430,30 @@ func specialChannelAssignability(T, V *rtype) bool {
 // https://golang.org/doc/go_spec.html#Assignability
 // Ignoring the interface rules (implemented elsewhere)
 // and the ideal constant rules (no ideal constants at run time).
+// directAssignable报告是否可以将V类型的值x直接（使用内存移动）分配给T类型的值。
+// https://golang.org/doc/go_spec.html#Assignability
+// 忽略接口规则（在其他地方实现）和理想常量规则（运行时没有理想常量）。
 func directlyAssignable(T, V *rtype) bool {
 	// x's type V is identical to T?
+	// x的V型与T相同
 	if T == V {
 		return true
 	}
 
 	// Otherwise at least one of T and V must not be defined
 	// and they must have the same kind.
+	// 都有名称或者类型不同
 	if T.hasName() && V.hasName() || T.Kind() != V.Kind() {
 		return false
 	}
 
+    // 通道类型，并且通道可以赋值
 	if T.Kind() == Chan && specialChannelAssignability(T, V) {
 		return true
 	}
 
 	// x's type T and V must have identical underlying types.
+	// x的类型T和V必须具有相同的底层类型。
 	return haveIdenticalUnderlyingType(T, V, true)
 }
 
