@@ -2457,18 +2457,26 @@ func directlyAssignable(T, V *rtype) bool {
 	return haveIdenticalUnderlyingType(T, V, true)
 }
 
+/**
+ * 判断是否类型一致
+ */
 func haveIdenticalType(T, V Type, cmpTags bool) bool {
 	if cmpTags {
 		return T == V
 	}
 
+    // 名称不同或者类型不同
 	if T.Name() != V.Name() || T.Kind() != V.Kind() {
 		return false
 	}
 
+    // 判断是否有相同的底层类型
 	return haveIdenticalUnderlyingType(T.common(), V.common(), false)
 }
 
+/**
+ * 判断是否有相同的底层类型
+ */
 func haveIdenticalUnderlyingType(T, V *rtype, cmpTags bool) bool {
 	if T == V {
 		return true
@@ -2481,19 +2489,21 @@ func haveIdenticalUnderlyingType(T, V *rtype, cmpTags bool) bool {
 
 	// Non-composite types of equal kind have same underlying type
 	// (the predefined instance of the type).
+	// 相同种类的非复合类型具有相同的基础类型（该类型的预定义实例）。
 	if Bool <= kind && kind <= Complex128 || kind == String || kind == UnsafePointer {
 		return true
 	}
 
 	// Composite types.
+	// 组合类型
 	switch kind {
-	case Array:
+	case Array: // 对于数组类型，长度要一致，元素类型要相同
 		return T.Len() == V.Len() && haveIdenticalType(T.Elem(), V.Elem(), cmpTags)
 
-	case Chan:
+	case Chan: // 通道类型一致，通道元素一致
 		return V.ChanDir() == T.ChanDir() && haveIdenticalType(T.Elem(), V.Elem(), cmpTags)
 
-	case Func:
+	case Func: // 函数类型，出参入参要一致，并且对应参数类型要相同
 		t := (*funcType)(unsafe.Pointer(T))
 		v := (*funcType)(unsafe.Pointer(V))
 		if t.outCount != v.outCount || t.inCount != v.inCount {
@@ -2511,7 +2521,7 @@ func haveIdenticalUnderlyingType(T, V *rtype, cmpTags bool) bool {
 		}
 		return true
 
-	case Interface:
+	case Interface: // 接口类型当没有方法时，才类型一致
 		t := (*interfaceType)(unsafe.Pointer(T))
 		v := (*interfaceType)(unsafe.Pointer(V))
 		if len(t.methods) == 0 && len(v.methods) == 0 {
@@ -2519,15 +2529,16 @@ func haveIdenticalUnderlyingType(T, V *rtype, cmpTags bool) bool {
 		}
 		// Might have the same methods but still
 		// need a run time conversion.
+		// 可能具有相同的方法，但仍需要运行时转换。
 		return false
 
-	case Map:
+	case Map: // 映射类型key和value类型都要致
 		return haveIdenticalType(T.Key(), V.Key(), cmpTags) && haveIdenticalType(T.Elem(), V.Elem(), cmpTags)
 
-	case Ptr, Slice:
+	case Ptr, Slice: // 切片和指针类型，对应的元素类型必须一致
 		return haveIdenticalType(T.Elem(), V.Elem(), cmpTags)
 
-	case Struct:
+	case Struct: // 结构体类型，字段数，对应字段名称，类型，标签（如果需要），嵌入类型都要一致
 		t := (*structType)(unsafe.Pointer(T))
 		v := (*structType)(unsafe.Pointer(V))
 		if len(t.fields) != len(v.fields) {
@@ -2577,8 +2588,29 @@ func haveIdenticalUnderlyingType(T, V *rtype, cmpTags bool) bool {
 // there can be more than one with a given string.
 // Only types we might want to look up are included:
 // pointers, channels, maps, slices, and arrays.
+/**
+ * typelinks在runtime包实现。在runtime/symtab.go文件中的
+ * moduledata中的typelinks，代表types的偏移量
+ * 它在每个模块中返回一部分的切片，并在每个模块中返回*rtype偏移量的切片。
+ *
+ * 每个模块中的类型均按字符串排序。 即，第一个模块的前两个链接类型是：
+ *
+ *  d0 := sections[0]
+ *  t1 := (*rtype)(add(d0, offset[0][0]))
+ *  t2 := (*rtype)(add(d0, offset[0][1]))
+ *
+ * 和
+ *
+ *  t1.String() <t2.String()
+ *
+ * 注意，字符串不是类型的唯一标识符：给定的字符串可以有多个。
+ * 仅包括我们可能要查找的类型：指针，通道，映射，切片和数组。
+ */
 func typelinks() (sections []unsafe.Pointer, offset [][]int32)
 
+/**
+ * 求指标的偏移量，并且返回rtype类型的打针
+ */
 func rtypeOff(section unsafe.Pointer, off int32) *rtype {
 	return (*rtype)(add(section, uintptr(off), "sizeof(rtype) > 0"))
 }
@@ -2587,6 +2619,11 @@ func rtypeOff(section unsafe.Pointer, off int32) *rtype {
 // the given string representation.
 // It may be empty (no known types with that string) or may have
 // multiple elements (multiple types with that string).
+/**
+ * typesByString返回typelinks()的子片段，其元素具有给定的字符串表示形式。
+ * 它可能为空（该字符串没有已知类型）或可能具有多个元素（该字符串为多个类型）。
+ * Question:
+ */
 func typesByString(s string) []*rtype {
 	sections, offset := typelinks()
 	var ret []*rtype
@@ -2596,6 +2633,9 @@ func typesByString(s string) []*rtype {
 
 		// We are looking for the first index i where the string becomes >= s.
 		// This is a copy of sort.Search, with f(h) replaced by (*typ[h].String() >= s).
+		// 我们正在寻找第一个索引i，其中字符串变为 >= s。
+        // 这是sort.Search的副本，其中f(h)替换为(* typ [h] .String()> = s)。
+        // 二分查找，找满足条件的索引最小的值
 		i, j := 0, len(offs)
 		for i < j {
 			h := i + (j-i)/2 // avoid overflow when computing h
@@ -2607,13 +2647,16 @@ func typesByString(s string) []*rtype {
 			}
 		}
 		// i == j, f(i-1) == false, and f(j) (= f(i)) == true  =>  answer is i.
+		// 当i == j, f(i-1) == false, 且 f(j) (= f(i)) == true  ==> i是如找的值
 
 		// Having found the first, linear scan forward to find the last.
 		// We could do a second binary search, but the caller is going
 		// to do a linear scan anyway.
+		// 找到第一个线性向前扫描以找到最后一个。
+        // 我们可以进行第二次二进制搜索，但是调用者还是要进行线性扫描。
 		for j := i; j < len(offs); j++ {
 			typ := rtypeOff(section, offs[j])
-			if typ.String() != s {
+			if typ.String() != s { // 从i位置开始匹配，直到第一个类型不是为止
 				break
 			}
 			ret = append(ret, typ)
@@ -2623,11 +2666,18 @@ func typesByString(s string) []*rtype {
 }
 
 // The lookupCache caches ArrayOf, ChanOf, MapOf and SliceOf lookups.
+/**
+ * lookupCache缓存ArrayOf，ChanOf，MapOf和SliceOf查找结果。
+ */
 var lookupCache sync.Map // map[cacheKey]*rtype
 
 // A cacheKey is the key for use in the lookupCache.
 // Four values describe any of the types we are looking for:
 // type kind, one or two subtypes, and an extra integer.
+/**
+ * cacheKey是在lookupCache中使用的键。
+ * 四个值描述了我们正在寻找的任何类型：类型kind，一个或两个子类型以及一个额外的整数。
+ */
 type cacheKey struct {
 	kind  Kind
 	t1    *rtype
@@ -2638,11 +2688,18 @@ type cacheKey struct {
 // The funcLookupCache caches FuncOf lookups.
 // FuncOf does not share the common lookupCache since cacheKey is not
 // sufficient to represent functions unambiguously.
+/**
+ * funcLookupCache缓存FuncOf查找结果。
+ * FuncOf不共享公共lookupCache，因为cacheKey不足以明确表示函数。
+ */
 var funcLookupCache struct {
+    // 用于守位m
 	sync.Mutex // Guards stores (but not loads) on m.
 
 	// m is a map[uint32][]*rtype keyed by the hash calculated in FuncOf.
 	// Elements of m are append-only and thus safe for concurrent reading.
+	// m是一个map[uint32][]*rtype，由FuncOf中计算出的哈希值作为键。
+    // m的元素是仅追加元素，因此对于并行读取是安全的。
 	m sync.Map
 }
 
@@ -2651,22 +2708,31 @@ var funcLookupCache struct {
 //
 // The gc runtime imposes a limit of 64 kB on channel element types.
 // If t's size is equal to or exceeds this limit, ChanOf panics.
+// ChanOf返回具有给定方向和元素类型的通道类型。
+// 例如，如果t表示int，则ChanOf(RecvDir，t)表示<-chan int。
+//
+// gc运行时对通道元素类型施加64kB的限制。
+// 如果t的大小等于或超过此限制，ChanOf会恐慌。
 func ChanOf(dir ChanDir, t Type) Type {
 	typ := t.(*rtype)
 
 	// Look in cache.
+	// 在缓存中查找
 	ckey := cacheKey{Chan, typ, nil, uintptr(dir)}
 	if ch, ok := lookupCache.Load(ckey); ok {
 		return ch.(*rtype)
 	}
 
 	// This restriction is imposed by the gc compiler and the runtime.
-	if typ.size >= 1<<16 {
+	// 此限制由gc编译器和运行时施加。
+	if typ.size >= 1<<16 { // 数据不能超过64kB
 		panic("reflect.ChanOf: element size too large")
 	}
 
 	// Look in known types.
 	// TODO: Precedence when constructing string.
+	// 查找已知类型。
+    // TODO：构造字符串时的优先级。
 	var s string
 	switch dir {
 	default:
@@ -2678,6 +2744,8 @@ func ChanOf(dir ChanDir, t Type) Type {
 	case BothDir:
 		s = "chan " + typ.String()
 	}
+
+	// 根据字符串描述获取类型，并返回第一个在缓存中的值
 	for _, tt := range typesByString(s) {
 		ch := (*chanType)(unsafe.Pointer(tt))
 		if ch.elem == typ && ch.dir == uintptr(dir) {
@@ -2687,6 +2755,7 @@ func ChanOf(dir ChanDir, t Type) Type {
 	}
 
 	// Make a channel type.
+	// 创建一种通道类型
 	var ichan interface{} = (chan unsafe.Pointer)(nil)
 	prototype := *(**chanType)(unsafe.Pointer(&ichan))
 	ch := *prototype
@@ -2706,6 +2775,12 @@ func ChanOf(dir ChanDir, t Type) Type {
 //
 // If the key type is not a valid map key type (that is, if it does
 // not implement Go's == operator), MapOf panics.
+/**
+ * MapOf返回具有给定键和元素类型的Map类型。
+ * 例如，如果k表示int而e表示字符串，则MapOfk, e)表示map[int]string。
+ *
+ * 如果键类型不是有效的Map键类型（即，如果它不实现Go的==运算符），则MapOf会发生恐慌。
+ */
 func MapOf(key, elem Type) Type {
 	ktyp := key.(*rtype)
 	etyp := elem.(*rtype)
@@ -2715,12 +2790,14 @@ func MapOf(key, elem Type) Type {
 	}
 
 	// Look in cache.
+	// 在缓存中查找
 	ckey := cacheKey{Map, ktyp, etyp, 0}
 	if mt, ok := lookupCache.Load(ckey); ok {
 		return mt.(Type)
 	}
 
 	// Look in known types.
+	// 查找已知类型
 	s := "map[" + ktyp.String() + "]" + etyp.String()
 	for _, tt := range typesByString(s) {
 		mt := (*mapType)(unsafe.Pointer(tt))
@@ -2733,6 +2810,8 @@ func MapOf(key, elem Type) Type {
 	// Make a map type.
 	// Note: flag values must match those used in the TMAP case
 	// in ../cmd/compile/internal/gc/reflect.go:dtypesym.
+	// 设定Map类型。
+    // 注意：标志值必须与../cmd/compile/internal/gc/reflect.go:dtypesym中TMAP情况下使用的标志值匹配。
 	var imap interface{} = (map[unsafe.Pointer]unsafe.Pointer)(nil)
 	mt := **(**mapType)(unsafe.Pointer(&imap))
 	mt.str = resolveReflectName(newName(s, "", false))
@@ -2745,28 +2824,32 @@ func MapOf(key, elem Type) Type {
 		return typehash(ktyp, p, seed)
 	}
 	mt.flags = 0
-	if ktyp.size > maxKeySize {
+	if ktyp.size > maxKeySize { // 超出了就是非直接key
 		mt.keysize = uint8(ptrSize)
 		mt.flags |= 1 // indirect key
 	} else {
 		mt.keysize = uint8(ktyp.size)
 	}
-	if etyp.size > maxValSize {
+	if etyp.size > maxValSize { // 超出了就是非直接value
 		mt.valuesize = uint8(ptrSize)
 		mt.flags |= 2 // indirect value
 	} else {
 		mt.valuesize = uint8(etyp.size)
 	}
 	mt.bucketsize = uint16(mt.bucket.size)
+	// isReflexive报告类型上的==操作是否是自反的。也就是说，对于类型t的所有值x，x == x。
 	if isReflexive(ktyp) {
 		mt.flags |= 4
 	}
+	// needKeyUpdate报告是否Map覆盖要求复制key。
 	if needKeyUpdate(ktyp) {
 		mt.flags |= 8
 	}
+	// hashMightPanic报告类型为t的映射键的哈希是否可能出现panic情况。
 	if hashMightPanic(ktyp) {
 		mt.flags |= 16
 	}
+    // 指向此类型的指针的类型，设置为零
 	mt.ptrToThis = 0
 
 	ti, _ := lookupCache.LoadOrStore(ckey, &mt.rtype)
@@ -2775,6 +2858,8 @@ func MapOf(key, elem Type) Type {
 
 // TODO(crawshaw): as these funcTypeFixedN structs have no methods,
 // they could be defined at runtime using the StructOf function.
+// TODO(crawshaw):：由于这些funcTypeFixedN结构没有方法，因此可以在运行时使用StructOf函数定义它们。
+// 一些固定参数的结构体类型
 type funcTypeFixed4 struct {
 	funcType
 	args [4]*rtype
@@ -2807,19 +2892,30 @@ type funcTypeFixed128 struct {
 // The variadic argument controls whether the function is variadic. FuncOf
 // panics if the in[len(in)-1] does not represent a slice and variadic is
 // true.
+/**
+ * FuncOf返回具有给定参数和结果类型的函数类型。
+ * 例如，如果k表示int，e表示字符串，则FuncOf([]Type{k}, []Type{e},false）表示func(int) string。
+ *
+ * variadic参数控制函数是否有可变参数。 如果in[len(in)-1]不代表切片并且可变参数为true，则FuncOf会发生恐慌。
+ * @param in 入参
+ * @param out 出参
+ * @param variadic 否有可变参数
+ */
 func FuncOf(in, out []Type, variadic bool) Type {
+    // 有可变参数类型的情况下
 	if variadic && (len(in) == 0 || in[len(in)-1].Kind() != Slice) {
 		panic("reflect.FuncOf: last arg of variadic func must be slice")
 	}
 
 	// Make a func type.
+	// 创建函数类型
 	var ifunc interface{} = (func())(nil)
 	prototype := *(**funcType)(unsafe.Pointer(&ifunc))
-	n := len(in) + len(out)
+	n := len(in) + len(out) // 总参数个数
 
 	var ft *funcType
 	var args []*rtype
-	switch {
+	switch { // 根据总有参数个数创建对应类型
 	case n <= 4:
 		fixed := new(funcTypeFixed4)
 		args = fixed.args[:0:len(fixed.args)]
@@ -2850,6 +2946,7 @@ func FuncOf(in, out []Type, variadic bool) Type {
 	*ft = *prototype
 
 	// Build a hash and minimally populate ft.
+	// 建立一个散列并最少填充ft。
 	var hash uint32
 	for _, in := range in {
 		t := in.(*rtype)
@@ -2865,18 +2962,20 @@ func FuncOf(in, out []Type, variadic bool) Type {
 		args = append(args, t)
 		hash = fnv1(hash, byte(t.hash>>24), byte(t.hash>>16), byte(t.hash>>8), byte(t.hash))
 	}
+	// 参数过多
 	if len(args) > 50 {
 		panic("reflect.FuncOf does not support more than 50 arguments")
 	}
-	ft.tflag = 0
+	ft.tflag = 0 // 无额外类型信息
 	ft.hash = hash
 	ft.inCount = uint16(len(in))
 	ft.outCount = uint16(len(out))
-	if variadic {
+	if variadic { // 有可变参数，设置最高位
 		ft.outCount |= 1 << 15
 	}
 
 	// Look in cache.
+	// 在缓存中查找
 	if ts, ok := funcLookupCache.m.Load(hash); ok {
 		for _, t := range ts.([]*rtype) {
 			if haveIdenticalUnderlyingType(&ft.rtype, t, true) {
@@ -2886,6 +2985,7 @@ func FuncOf(in, out []Type, variadic bool) Type {
 	}
 
 	// Not in cache, lock and retry.
+	// 如果缓存中没有，就锁住缓存，再次尝试
 	funcLookupCache.Lock()
 	defer funcLookupCache.Unlock()
 	if ts, ok := funcLookupCache.m.Load(hash); ok {
@@ -2896,6 +2996,7 @@ func FuncOf(in, out []Type, variadic bool) Type {
 		}
 	}
 
+    // 向缓存中添加函数的方法
 	addToCache := func(tt *rtype) Type {
 		var rts []*rtype
 		if rti, ok := funcLookupCache.m.Load(hash); ok {
@@ -2906,6 +3007,7 @@ func FuncOf(in, out []Type, variadic bool) Type {
 	}
 
 	// Look in known types for the same string representation.
+	// 在已知类型中查找相同的字符串表示形式。
 	str := funcStr(ft)
 	for _, tt := range typesByString(str) {
 		if haveIdenticalUnderlyingType(&ft.rtype, tt, true) {
@@ -2914,20 +3016,28 @@ func FuncOf(in, out []Type, variadic bool) Type {
 	}
 
 	// Populate the remaining fields of ft and store in cache.
+	// 填充ft的其余字段并存储在缓存中。
 	ft.str = resolveReflectName(newName(str, "", false))
 	ft.ptrToThis = 0
+	// 向缓存中添加方法类型并且返回添加值
 	return addToCache(&ft.rtype)
 }
 
 // funcStr builds a string representation of a funcType.
+/**
+ * funcStr构建funcType的字符串表示形式。输出类似：func(int, string, ...bool) (int, string, ...bool)
+ *
+ * @param ft 函数类型
+ * @return funcType的字符串表示形式
+ **/
 func funcStr(ft *funcType) string {
 	repr := make([]byte, 0, 64)
 	repr = append(repr, "func("...)
-	for i, t := range ft.in() {
+	for i, t := range ft.in() { // 处理入参
 		if i > 0 {
 			repr = append(repr, ", "...)
 		}
-		if ft.IsVariadic() && i == int(ft.inCount)-1 {
+		if ft.IsVariadic() && i == int(ft.inCount)-1 { // 可变参数
 			repr = append(repr, "..."...)
 			repr = append(repr, (*sliceType)(unsafe.Pointer(t)).elem.String()...)
 		} else {
@@ -2935,6 +3045,7 @@ func funcStr(ft *funcType) string {
 		}
 	}
 	repr = append(repr, ')')
+	// 处理出参
 	out := ft.out()
 	if len(out) == 1 {
 		repr = append(repr, ' ')
@@ -2955,16 +3066,22 @@ func funcStr(ft *funcType) string {
 
 // isReflexive reports whether the == operation on the type is reflexive.
 // That is, x == x for all values x of type t.
+/**
+ * isReflexive报告类型上的==操作是否自反。 也就是说，对于类型t的所有值x，x == x。
+ * @param t 类型
+ * @return true: ==操作是自反
+ * @date 2020-03-23 08:57:05
+ **/
 func isReflexive(t *rtype) bool {
 	switch t.Kind() {
 	case Bool, Int, Int8, Int16, Int32, Int64, Uint, Uint8, Uint16, Uint32, Uint64, Uintptr, Chan, Ptr, String, UnsafePointer:
 		return true
 	case Float32, Float64, Complex64, Complex128, Interface:
 		return false
-	case Array:
+	case Array: // 数组类型，判定子类型
 		tt := (*arrayType)(unsafe.Pointer(t))
 		return isReflexive(tt.elem)
-	case Struct:
+	case Struct: // 结构体类型，判断所有的的字段类型
 		tt := (*structType)(unsafe.Pointer(t))
 		for _, f := range tt.fields {
 			if !isReflexive(f.typ) {
@@ -2979,6 +3096,11 @@ func isReflexive(t *rtype) bool {
 }
 
 // needKeyUpdate reports whether map overwrites require the key to be copied.
+/**
+ * needKeyUpdate报告Map覆盖是否需要复制key。
+ * @param 类型
+ * @return true: Map覆盖需要复制key
+ **/
 func needKeyUpdate(t *rtype) bool {
 	switch t.Kind() {
 	case Bool, Int, Int8, Int16, Int32, Int64, Uint, Uint8, Uint16, Uint32, Uint64, Uintptr, Chan, Ptr, UnsafePointer:
@@ -2987,11 +3109,14 @@ func needKeyUpdate(t *rtype) bool {
 		// Float keys can be updated from +0 to -0.
 		// String keys can be updated to use a smaller backing store.
 		// Interfaces might have floats of strings in them.
+		// float key可以从+0更新到-0。
+        // 可以将字符串键更新为使用较小的后备存储。
+        // 接口中可能包含字符串浮点数。
 		return true
-	case Array:
+	case Array: // 数组类型，判定子类型
 		tt := (*arrayType)(unsafe.Pointer(t))
 		return needKeyUpdate(tt.elem)
-	case Struct:
+	case Struct: // 结构体类型，判断所有的的字段类型
 		tt := (*structType)(unsafe.Pointer(t))
 		for _, f := range tt.fields {
 			if needKeyUpdate(f.typ) {
@@ -3006,14 +3131,19 @@ func needKeyUpdate(t *rtype) bool {
 }
 
 // hashMightPanic reports whether the hash of a map key of type t might panic.
+/**
+ * hashMightPanic报告类型为t的Map key的哈希是否可能出现panic情况。
+ * @param
+ * @return
+ **/
 func hashMightPanic(t *rtype) bool {
 	switch t.Kind() {
-	case Interface:
+	case Interface: // 接口类型会出现
 		return true
-	case Array:
+	case Array: // 数组类型，判定子类型
 		tt := (*arrayType)(unsafe.Pointer(t))
 		return hashMightPanic(tt.elem)
-	case Struct:
+	case Struct: // 结构体类型，判断所有的的字段类型
 		tt := (*structType)(unsafe.Pointer(t))
 		for _, f := range tt.fields {
 			if hashMightPanic(f.typ) {
@@ -3021,7 +3151,7 @@ func hashMightPanic(t *rtype) bool {
 			}
 		}
 		return false
-	default:
+	default: // 其他必定不会出现
 		return false
 	}
 }
@@ -3030,12 +3160,20 @@ func hashMightPanic(t *rtype) bool {
 // These types exist only for GC, so we only fill out GC relevant info.
 // Currently, that's just size and the GC program. We also fill in string
 // for possible debugging use.
+/**
+ * 确保这些例程与../../runtime/map.go保持同步！
+ * 这些类型仅适用于GC，因此我们仅填写与GC相关的信息。
+ * 当前，这只是大小和GC程序。 我们还填写字符串以供可能的调试使用。
+ */
 const (
 	bucketSize uintptr = 8
 	maxKeySize uintptr = 128
 	maxValSize uintptr = 128
 )
 
+/**
+ * 创建桶类型
+ */
 func bucketOf(ktyp, etyp *rtype) *rtype {
 	if ktyp.size > maxKeySize {
 		ktyp = PtrTo(ktyp).(*rtype)
@@ -3049,6 +3187,12 @@ func bucketOf(ktyp, etyp *rtype) *rtype {
 	// or 2072 bytes, or 259 pointer-size words, or 33 bytes of pointer bitmap.
 	// Note that since the key and value are known to be <= 128 bytes,
 	// they're guaranteed to have bitmaps instead of GC programs.
+	/**
+	 * 准备GC数据（如果有）。
+     * 一个存储桶最多为bucketSize*(1 + maxKeySize + maxValSize)+ 2 * ptrSize字节，
+     * 即2072字节，或259个指针大小的字，或33字节的指针bitmap。
+     * 请注意，由于已知键和值<= 128字节，因此可以确保它们具有bitmap而不是GC程序。
+	 */
 	var gcdata *byte
 	var ptrdata uintptr
 	var overflowPad uintptr
@@ -3080,6 +3224,7 @@ func bucketOf(ktyp, etyp *rtype) *rtype {
 		ptrdata = (word + 1) * ptrSize
 
 		// overflow word must be last
+		// 溢出字必须是最后一个
 		if ptrdata != size {
 			panic("reflect: bad layout computation in MapOf")
 		}
@@ -3100,12 +3245,18 @@ func bucketOf(ktyp, etyp *rtype) *rtype {
 	return b
 }
 
+/**
+ * 获取gc字节切片
+ */
 func (t *rtype) gcSlice(begin, end uintptr) []byte {
 	return (*[1 << 30]byte)(unsafe.Pointer(t.gcdata))[begin:end:end]
 }
 
 // emitGCMask writes the GC mask for [n]typ into out, starting at bit
 // offset base.
+/**
+ * emitGCMask将[n] typ的GC掩码从位偏移量的基数开始写出到out中。
+ */
 func emitGCMask(out []byte, base uintptr, typ *rtype, n uintptr) {
 	if typ.kind&kindGCProg != 0 {
 		panic("reflect: unexpected GC program")
@@ -3125,19 +3276,25 @@ func emitGCMask(out []byte, base uintptr, typ *rtype, n uintptr) {
 
 // appendGCProg appends the GC program for the first ptrdata bytes of
 // typ to dst and returns the extended slice.
+/**
+ * appendGCProg将typ的第一个ptrdata字节的GC程序追加到dst，并返回扩展的切片。
+ */
 func appendGCProg(dst []byte, typ *rtype) []byte {
 	if typ.kind&kindGCProg != 0 {
 		// Element has GC program; emit one element.
+		// 元素具有GC程序； 发出一个元素。
 		n := uintptr(*(*uint32)(unsafe.Pointer(typ.gcdata)))
 		prog := typ.gcSlice(4, 4+n-1)
 		return append(dst, prog...)
 	}
 
 	// Element is small with pointer mask; use as literal bits.
+	// 元素很小，带有指针mask； 用作literal bits。
 	ptrs := typ.ptrdata / ptrSize
 	mask := typ.gcSlice(0, (ptrs+7)/8)
 
 	// Emit 120-bit chunks of full bytes (max is 127 but we avoid using partial bytes).
+	// 发射完整字节的120位块（最大为127，但我们避免使用部分字节）。
 	for ; ptrs > 120; ptrs -= 120 {
 		dst = append(dst, 120)
 		dst = append(dst, mask[:15]...)
@@ -3151,16 +3308,22 @@ func appendGCProg(dst []byte, typ *rtype) []byte {
 
 // SliceOf returns the slice type with element type t.
 // For example, if t represents int, SliceOf(t) represents []int.
+/**
+ * SliceOf返回元素类型为t的切片类型。
+ * 例如，如果t表示int，则SliceOf(t)表示[]int。
+ */
 func SliceOf(t Type) Type {
 	typ := t.(*rtype)
 
 	// Look in cache.
+	// 在缓存中查找。
 	ckey := cacheKey{Slice, typ, nil, 0}
 	if slice, ok := lookupCache.Load(ckey); ok {
 		return slice.(Type)
 	}
 
 	// Look in known types.
+	// 查找已知类型。
 	s := "[]" + typ.String()
 	for _, tt := range typesByString(s) {
 		slice := (*sliceType)(unsafe.Pointer(tt))
@@ -3171,6 +3334,7 @@ func SliceOf(t Type) Type {
 	}
 
 	// Make a slice type.
+	// 创建一种切片类型
 	var islice interface{} = ([]unsafe.Pointer)(nil)
 	prototype := *(**sliceType)(unsafe.Pointer(&islice))
 	slice := *prototype
@@ -3187,20 +3351,32 @@ func SliceOf(t Type) Type {
 // The structLookupCache caches StructOf lookups.
 // StructOf does not share the common lookupCache since we need to pin
 // the memory associated with *structTypeFixedN.
+/**
+ * structLookupCache缓存StructOf查找结果。
+ * StructOf不共享公共lookupCache，因为我们需要固定与*structTypeFixedN关联的内存。
+ */
 var structLookupCache struct {
-	sync.Mutex // Guards stores (but not loads) on m.
+	sync.Mutex // Guards stores (but not loads) on m. // 用于守位m，Question: 具体怎么守位
 
 	// m is a map[uint32][]Type keyed by the hash calculated in StructOf.
 	// Elements in m are append-only and thus safe for concurrent reading.
+	// m是一个Map [uint32] []类型，由在StructOf中计算出的哈希值作为键。
+    // m中的元素是仅追加元素，因此可以安全地进行并行读取。
 	m sync.Map
 }
 
+/**
+ * 结构体非平凡类型
+ */
 type structTypeUncommon struct {
 	structType
 	u uncommonType
 }
 
 // isLetter reports whether a given 'rune' is classified as a Letter.
+/**
+ * isLetter报告给定的“符文”是否归类为字母。
+ */
 func isLetter(ch rune) bool {
 	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_' || ch >= utf8.RuneSelf && unicode.IsLetter(ch)
 }
@@ -3211,6 +3387,14 @@ func isLetter(ch rune) bool {
 //
 // identifier = letter { letter | unicode_digit } .
 // letter = unicode_letter | "_" .
+/**
+ * isValidFieldName检查字符串是否为有效的（结构）字段名称。
+ *
+ * 根据语言规范，字段名称应为标识符。
+ *
+ * 标识符 = 字母{字母|unicode数字}。
+ * 字母 = unicode字母|"_"。
+ */
 func isValidFieldName(fieldName string) bool {
 	for i, c := range fieldName {
 		if i == 0 && !isLetter(c) {
@@ -3232,11 +3416,19 @@ func isValidFieldName(fieldName string) bool {
 // StructOf currently does not generate wrapper methods for embedded
 // fields and panics if passed unexported StructFields.
 // These limitations may be lifted in a future version.
+/**
+ * StructOf返回包含字段的结构类型。
+ * 偏移量和索引字段将被忽略并按照编译器的方式进行计算。
+ *
+ * StructOf当前不为嵌入式字段生成包装方法，并且如果传递未导出的StructFields，则会发生恐慌。
+ * 这些限制可能会在将来的版本中取消。
+ * TODO 需要进一步研究
+ */
 func StructOf(fields []StructField) Type {
 	var (
 		hash       = fnv1(0, []byte("struct {")...)
 		size       uintptr
-		typalign   uint8
+		typalign   uint8 // 对齐类型
 		comparable = true
 		methods    []method
 
@@ -3244,20 +3436,20 @@ func StructOf(fields []StructField) Type {
 		repr = make([]byte, 0, 64)
 		fset = map[string]struct{}{} // fields' names
 
-		hasGCProg = false // records whether a struct-field type has a GCProg
+		hasGCProg = false // records whether a struct-field type has a GCProg // 记录结构字段类型是否具有GCProg
 	)
 
 	lastzero := uintptr(0)
 	repr = append(repr, "struct {"...)
 	pkgpath := ""
-	for i, field := range fields {
-		if field.Name == "" {
+	for i, field := range fields { // 处理每一个字段
+		if field.Name == "" { // 字段名为空
 			panic("reflect.StructOf: field " + strconv.Itoa(i) + " has no name")
 		}
-		if !isValidFieldName(field.Name) {
+		if !isValidFieldName(field.Name) { // 字段名不合法
 			panic("reflect.StructOf: field " + strconv.Itoa(i) + " has invalid name")
 		}
-		if field.Type == nil {
+		if field.Type == nil { // 字段是nil类型
 			panic("reflect.StructOf: field " + strconv.Itoa(i) + " has no type")
 		}
 		f, fpkgpath := runtimeStructField(field)
@@ -3265,7 +3457,7 @@ func StructOf(fields []StructField) Type {
 		if ft.kind&kindGCProg != 0 {
 			hasGCProg = true
 		}
-		if fpkgpath != "" {
+		if fpkgpath != "" { // 获取包路径
 			if pkgpath == "" {
 				pkgpath = fpkgpath
 			} else if pkgpath != fpkgpath {
@@ -3274,24 +3466,28 @@ func StructOf(fields []StructField) Type {
 		}
 
 		// Update string and hash
+		// 更新字符串和哈希
 		name := f.name.name()
 		hash = fnv1(hash, []byte(name)...)
 		repr = append(repr, (" " + name)...)
-		if f.embedded() {
+		if f.embedded() {  // 如果是嵌入类型
 			// Embedded field
-			if f.typ.Kind() == Ptr {
+			// 嵌入字段
+			if f.typ.Kind() == Ptr { // 是指针类型
 				// Embedded ** and *interface{} are illegal
+				// 嵌入式**和*interface{}是非法的
 				elem := ft.Elem()
+				// 元素类型不能是指针和接口
 				if k := elem.Kind(); k == Ptr || k == Interface {
 					panic("reflect.StructOf: illegal embedded field type " + ft.String())
 				}
 			}
 
 			switch f.typ.Kind() {
-			case Interface:
+			case Interface: // 接口类型
 				ift := (*interfaceType)(unsafe.Pointer(ft))
-				for im, m := range ift.methods {
-					if ift.nameOff(m.name).pkgPath() != "" {
+				for im, m := range ift.methods { // 处理接口的每个方法
+					if ift.nameOff(m.name).pkgPath() != "" { // 包名为空
 						// TODO(sbinet).  Issue 15924.
 						panic("reflect: embedded interface with unexported method(s) not implemented")
 					}
@@ -3347,7 +3543,7 @@ func StructOf(fields []StructField) Type {
 						tfn:  resolveReflectText(unsafe.Pointer(&tfn)),
 					})
 				}
-			case Ptr:
+			case Ptr: // 指针类型
 				ptr := (*ptrType)(unsafe.Pointer(ft))
 				if unt := ptr.uncommon(); unt != nil {
 					if i > 0 && unt.mcount > 0 {
