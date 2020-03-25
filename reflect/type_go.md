@@ -1,3 +1,7 @@
+reflect包基础类型是Type，其主要实现是rtype，在rtype下会有基于种类型的实现
+
+
+
 ```go
 
 // 包reflect实现了运行时反射，从而允许程序处理任意类型的对象。典型的用法是使用静态类型
@@ -3649,6 +3653,11 @@ func StructOf(fields []StructField) Type {
 		// to ensure that taking the address of the final
 		// zero-sized field can't manufacture a pointer to the
 		// next object in the heap. See issue 9401.
+		/**
+		 * 这是一个非零大小的结构，以零大小的字段结尾。 我们添加了一个额外的填充字节，
+		 * 以确保获取最后一个零大小字段的地址不会产生指向堆中下一个对象的指针。 
+		 * 请参阅 issue 9401。
+		 */
 		size++
 	}
 
@@ -3665,6 +3674,11 @@ func StructOf(fields []StructField) Type {
 		// struct. To get the same layout for a run time generated type, we
 		// need an array directly following the uncommonType memory.
 		// A similar strategy is used for funcTypeFixed4, ...funcTypeFixedN.
+        /**
+         * 代表结构的* rtype在内存中直接跟随着表示附加到该结构的方法的方法对象数组。
+         * 为了使运行时生成的类型具有相同的布局，我们需要紧跟在uncommonType内存之后的数组。
+         * 类似的策略用于funcTypeFixed4，... funcTypeFixedN。
+         */
 		tt := New(StructOf([]StructField{
 			{Name: "S", Type: TypeOf(structType{})},
 			{Name: "U", Type: TypeOf(uncommonType{})},
@@ -3680,6 +3694,8 @@ func StructOf(fields []StructField) Type {
 	// methods will need to be sorted like the compiler does.
 	// TODO(sbinet): Once we allow non-exported methods, we will
 	// need to compute xcount as the number of exported methods.
+	// TODO（sbinet）: 一旦我们允许嵌入多个类型，就需要像编译器一样对方法进行排序。
+    // TODO（sbinet）: 一旦允许非导出方法，我们将需要计算xcount作为导出方法的数量。
 	ut.mcount = uint16(len(methods))
 	ut.xcount = ut.mcount
 	ut.moff = uint32(unsafe.Sizeof(uncommonType{}))
@@ -3692,6 +3708,7 @@ func StructOf(fields []StructField) Type {
 	str := string(repr)
 
 	// Round the size up to be a multiple of the alignment.
+	// 将大小舍入为对齐的倍数。
 	size = align(size, uintptr(typalign))
 
 	// Make the struct type.
@@ -3740,6 +3757,8 @@ func StructOf(fields []StructField) Type {
 			// even if 't' wasn't a structType with methods, we should be ok
 			// as the 'u uncommonType' field won't be accessed except when
 			// tflag&tflagUncommon is set.
+			// 即使't'不是带有方法的structType，也应该没问题，因为除非设置了
+			// tflag＆tflagUncommon，否则不会访问'u uncommonType'字段。
 			return addToCache(t)
 		}
 	}
@@ -3763,24 +3782,27 @@ func StructOf(fields []StructField) Type {
 				lastPtrField = i
 			}
 		}
-		prog := []byte{0, 0, 0, 0} // will be length of prog
+		prog := []byte{0, 0, 0, 0} // will be length of prog // 将是prog的长度
 		var off uintptr
 		for i, ft := range fs {
 			if i > lastPtrField {
 				// gcprog should not include anything for any field after
 				// the last field that contains pointer data
+				// gcprog不应在包含指针数据的最后一个字段之后的任何字段中包含任何内容
 				break
 			}
 			if !ft.typ.pointers() {
 				// Ignore pointerless fields.
+				// 忽略无指针字段。
 				continue
 			}
 			// Pad to start of this field with zeros.
+			// 用零填充该字段的开头。
 			if ft.offset() > off {
 				n := (ft.offset() - off) / ptrSize
-				prog = append(prog, 0x01, 0x00) // emit a 0 bit
+				prog = append(prog, 0x01, 0x00) // emit a 0 bit // 发出0位
 				if n > 1 {
-					prog = append(prog, 0x81)      // repeat previous bit
+					prog = append(prog, 0x81)      // repeat previous bit // 重复上一位
 					prog = appendVarint(prog, n-1) // n-1 times
 				}
 				off = ft.offset()
@@ -3829,7 +3851,14 @@ func StructOf(fields []StructField) Type {
 // runtimeStructField takes a StructField value passed to StructOf and
 // returns both the corresponding internal representation, of type
 // structField, and the pkgpath value to use for this field.
+/**
+ * runtimeStructField接受传递给StructOf的StructField值，
+ * 并返回相应的内部表示形式structField和用于该字段的pkgpath值。
+ * @param
+ * @return
+ **/
 func runtimeStructField(field StructField) (structField, string) {
+    // 无包名的匿名字段
 	if field.Anonymous && field.PkgPath != "" {
 		panic("reflect.StructOf: field \"" + field.Name + "\" is anonymous but has PkgPath set")
 	}
@@ -3838,6 +3867,7 @@ func runtimeStructField(field StructField) (structField, string) {
 	if exported {
 		// Best-effort check for misuse.
 		// Since this field will be treated as exported, not much harm done if Unicode lowercase slips through.
+		// 尽最大努力检查滥用情况。 由于此字段将被视为导出字段，因此如果Unicode小写漏掉，不会造成太大危害。
 		c := field.Name[0]
 		if 'a' <= c && c <= 'z' || c == '_' {
 			panic("reflect.StructOf: field \"" + field.Name + "\" is unexported but missing PkgPath")
@@ -3861,11 +3891,17 @@ func runtimeStructField(field StructField) (structField, string) {
 // typeptrdata returns the length in bytes of the prefix of t
 // containing pointer data. Anything after this offset is scalar data.
 // keep in sync with ../cmd/compile/internal/gc/reflect.go
+/**
+ * typeptrdata返回包含指针数据的t前缀的长度（以字节为单位）。
+ * 此偏移量之后的所有内容均为标量数据。 与../cmd/compile/internal/gc/reflect.go保持同步
+ * @return 包含指针数据的t前缀的长度，此偏移量之后的所有内容均为标量数据。
+ */
 func typeptrdata(t *rtype) uintptr {
 	switch t.Kind() {
 	case Struct:
 		st := (*structType)(unsafe.Pointer(t))
 		// find the last field that has pointers.
+		// 查找具有指针的最后一个字段。
 		field := -1
 		for i := range st.fields {
 			ft := st.fields[i].typ
@@ -3885,6 +3921,7 @@ func typeptrdata(t *rtype) uintptr {
 }
 
 // See cmd/compile/internal/gc/reflect.go for derivation of constant.
+// 有关常量的派生，请参见cmd/compile/internal/gc/reflect.go。
 const maxPtrmaskBytes = 2048
 
 // ArrayOf returns the array type with the given count and element type.
@@ -3892,16 +3929,25 @@ const maxPtrmaskBytes = 2048
 //
 // If the resulting type would be larger than the available address space,
 // ArrayOf panics.
+/**
+ * ArrayOf返回具有给定计数和元素类型的数组类型。
+ * 例如，如果t表示int，则ArrayOf（5，t）表示[5] int。
+ *
+ * 如果结果类型大于可用的地址空间，
+ *  ArrayOf恐慌。
+ */
 func ArrayOf(count int, elem Type) Type {
 	typ := elem.(*rtype)
 
 	// Look in cache.
+	// 在缓存中查找
 	ckey := cacheKey{Array, typ, nil, uintptr(count)}
 	if array, ok := lookupCache.Load(ckey); ok {
 		return array.(Type)
 	}
 
 	// Look in known types.
+	// 在已知类型中查找相同的字符串表示形式
 	s := "[" + strconv.Itoa(count) + "]" + typ.String()
 	for _, tt := range typesByString(s) {
 		array := (*arrayType)(unsafe.Pointer(tt))
@@ -3912,6 +3958,7 @@ func ArrayOf(count int, elem Type) Type {
 	}
 
 	// Make an array type.
+	// 创建数组类型
 	var iarray interface{} = [1]unsafe.Pointer{}
 	prototype := *(**arrayType)(unsafe.Pointer(&iarray))
 	array := *prototype
@@ -3926,12 +3973,13 @@ func ArrayOf(count int, elem Type) Type {
 	array.ptrToThis = 0
 	if typ.size > 0 {
 		max := ^uintptr(0) / typ.size
-		if uintptr(count) > max {
+		if uintptr(count) > max { // 不能大于整个虚拟地址空间可表示的数组大小，虚拟地址空间根据机器的不同不一样
 			panic("reflect.ArrayOf: array size would exceed virtual address space")
 		}
 	}
-	array.size = typ.size * uintptr(count)
-	if count > 0 && typ.ptrdata != 0 {
+	array.size = typ.size * uintptr(count) // 数组的大小
+	if count > 0 && typ.ptrdata != 0 { // 元素大于0，并且指针数据不为0
+	    // Question: 这个原理是什么？
 		array.ptrdata = typ.size*uintptr(count-1) + typ.ptrdata
 	}
 	array.align = typ.align
@@ -3940,13 +3988,14 @@ func ArrayOf(count int, elem Type) Type {
 	array.slice = SliceOf(elem).(*rtype)
 
 	switch {
-	case typ.ptrdata == 0 || array.size == 0:
+	case typ.ptrdata == 0 || array.size == 0: // 无指针或者数组长度为0
 		// No pointers.
 		array.gcdata = nil
 		array.ptrdata = 0
 
 	case count == 1:
 		// In memory, 1-element array looks just like the element.
+		// 在内存中，1元素数组看起来就像元素。
 		array.kind |= typ.kind & kindGCProg
 		array.gcdata = typ.gcdata
 		array.ptrdata = typ.ptrdata
@@ -3955,6 +4004,8 @@ func ArrayOf(count int, elem Type) Type {
 		// Element is small with pointer mask; array is still small.
 		// Create direct pointer mask by turning each 1 bit in elem
 		// into count 1 bits in larger mask.
+		// 元素很小，带有指针遮罩； 数组仍然很小。
+        // 通过将elem中的每个1位转换为较大掩码中的1个位来创建直接指针掩码。
 		mask := make([]byte, (array.ptrdata/ptrSize+7)/8)
 		emitGCMask(mask, 0, typ, array.len)
 		array.gcdata = &mask[0]
@@ -3962,6 +4013,7 @@ func ArrayOf(count int, elem Type) Type {
 	default:
 		// Create program that emits one element
 		// and then repeats to make the array.
+		// 创建发出一个元素然后重复进行以生成数组的程序。
 		prog := []byte{0, 0, 0, 0} // will be length of prog
 		prog = appendGCProg(prog, typ)
 		// Pad from ptrdata to size.
@@ -3976,6 +4028,7 @@ func ArrayOf(count int, elem Type) Type {
 			}
 		}
 		// Repeat count-1 times.
+		// 重复count-1次
 		if elemWords < 0x80 {
 			prog = append(prog, byte(elemWords|0x80))
 		} else {
@@ -3987,6 +4040,7 @@ func ArrayOf(count int, elem Type) Type {
 		*(*uint32)(unsafe.Pointer(&prog[0])) = uint32(len(prog) - 4)
 		array.kind |= kindGCProg
 		array.gcdata = &prog[0]
+		// 高估但还可以 必须匹配程序
 		array.ptrdata = array.size // overestimate but ok; must match program
 	}
 
@@ -4011,6 +4065,7 @@ func ArrayOf(count int, elem Type) Type {
 	switch {
 	case count == 1 && !ifaceIndir(typ):
 		// array of 1 direct iface type can be direct
+		// 1个直接iface类型的数组可以是直接的
 		array.kind |= kindDirectIface
 	default:
 		array.kind &^= kindDirectIface
@@ -4033,26 +4088,39 @@ func appendVarint(x []byte, v uintptr) []byte {
 // a nil *rtype must be replaced by a nil Type, but in gccgo this
 // function takes care of ensuring that multiple *rtype for the same
 // type are coalesced into a single Type.
+/**
+ * toType从*rtype转换为可以返回给package反射客户端的Type。
+ * 在gc中，唯一需要注意的是必须将nil *rtype替换为nil Type，但是在gccgo中，
+ * 此函数将确保将同一类型的多个*rtype合并为单个Type。
+ */
 func toType(t *rtype) Type {
 	if t == nil {
 		return nil
 	}
+    // Question: 没有类型转换，直接返回
 	return t
 }
 
+/**
+ * 函数类型的底层key
+ */
 type layoutKey struct {
-	ftyp *funcType // function signature
-	rcvr *rtype    // receiver type, or nil if none
+	ftyp *funcType // function signature // 函数签名
+	rcvr *rtype    // receiver type, or nil if none // 接收者类型
 }
 
+/**
+ * 函数类型的底层value
+ */
 type layoutType struct {
 	t         *rtype
-	argSize   uintptr // size of arguments
-	retOffset uintptr // offset of return values.
+	argSize   uintptr // size of arguments // 参数大小，
+	retOffset uintptr // offset of return values. // 返回值的偏移量
 	stack     *bitVector
 	framePool *sync.Pool
 }
 
+// 用于函数底层的缓存
 var layoutCache sync.Map // map[layoutKey]layoutType
 
 // funcLayout computes a struct type representing the layout of the
@@ -4061,13 +4129,27 @@ var layoutCache sync.Map // map[layoutKey]layoutType
 // The returned type exists only for GC, so we only fill out GC relevant info.
 // Currently, that's just size and the GC program. We also fill in
 // the name for possible debugging use.
+/**
+ * funcLayout计算一个表示函数参数布局和函数类型t的返回值的结构类型。
+ * 如果rcvr != nil，则rcvr指定接收方的类型。
+ * 返回的类型仅适用于GC，因此我们仅填写与GC相关的信息。
+ * 当前，这只是大小和GC程序。 我们还填写该名称，以供可能的调试使用。
+ * @param t 函数类型
+ * @param rcvr 接收者类型
+ * @return frametype 帧类型
+ * @return argSize 参数大小
+ * @return retOffset 返回值的偏移量
+ * @return stk 位向量
+ * @return framePool 帧的缓存池
+ */
 func funcLayout(t *funcType, rcvr *rtype) (frametype *rtype, argSize, retOffset uintptr, stk *bitVector, framePool *sync.Pool) {
-	if t.Kind() != Func {
+	if t.Kind() != Func { // 不是方法
 		panic("reflect: funcLayout of non-func type " + t.String())
 	}
-	if rcvr != nil && rcvr.Kind() == Interface {
+	if rcvr != nil && rcvr.Kind() == Interface { // 接收者不为空，并且接收者是接口
 		panic("reflect: funcLayout with interface receiver " + rcvr.String())
 	}
+
 	k := layoutKey{t, rcvr}
 	if lti, ok := layoutCache.Load(k); ok {
 		lt := lti.(layoutType)
@@ -4075,19 +4157,23 @@ func funcLayout(t *funcType, rcvr *rtype) (frametype *rtype, argSize, retOffset 
 	}
 
 	// compute gc program & stack bitmap for arguments
+	// 计算gc程序和堆栈位图出参
 	ptrmap := new(bitVector)
 	var offset uintptr
 	if rcvr != nil {
 		// Reflect uses the "interface" calling convention for
 		// methods, where receivers take one word of argument
 		// space no matter how big they actually are.
-		if ifaceIndir(rcvr) || rcvr.pointers() {
+		// Reflect使用“接口”调用约定作为方法，接收者无论实际大小如何都占用一个参数空间。
+		if ifaceIndir(rcvr) || rcvr.pointers() { // 接口或者指针
 			ptrmap.append(1)
 		} else {
 			ptrmap.append(0)
 		}
-		offset += ptrSize
+		offset += ptrSize // const ptrSize = 4 << (^uintptr(0) >> 63) ==> 0b00010000
 	}
+
+	// 处理入参
 	for _, arg := range t.in() {
 		offset += -offset & uintptr(arg.align-1)
 		addTypeBits(ptrmap, offset, arg)
@@ -4104,6 +4190,7 @@ func funcLayout(t *funcType, rcvr *rtype) (frametype *rtype, argSize, retOffset 
 	offset += -offset & (ptrSize - 1)
 
 	// build dummy rtype holding gc program
+	// 建立虚拟rtype持有gc程序
 	x := &rtype{
 		align:   ptrSize,
 		size:    offset,
@@ -4122,6 +4209,7 @@ func funcLayout(t *funcType, rcvr *rtype) (frametype *rtype, argSize, retOffset 
 	x.str = resolveReflectName(newName(s, "", false))
 
 	// cache result for future callers
+    // 缓存结果以供将来的使用
 	framePool = &sync.Pool{New: func() interface{} {
 		return unsafe_New(x)
 	}}
@@ -4137,24 +4225,32 @@ func funcLayout(t *funcType, rcvr *rtype) (frametype *rtype, argSize, retOffset 
 }
 
 // ifaceIndir reports whether t is stored indirectly in an interface value.
+/**
+ * ifaceIndir报告t是否间接存储在接口值中。
+ */
 func ifaceIndir(t *rtype) bool {
 	return t.kind&kindDirectIface == 0
 }
 
+// 位向量
 type bitVector struct {
-	n    uint32 // number of bits
+	n    uint32 // number of bits // 位数
 	data []byte
 }
 
 // append a bit to the bitmap.
+// 向位图中添加一个位，uint8其实只使用了最低位，值为0或者1
 func (bv *bitVector) append(bit uint8) {
-	if bv.n%8 == 0 {
+	if bv.n%8 == 0 { // 位刚好用完了，扩容一个字节
 		bv.data = append(bv.data, 0)
 	}
-	bv.data[bv.n/8] |= bit << (bv.n % 8)
+	bv.data[bv.n/8] |= bit << (bv.n % 8) // 将位添加到指定位置
 	bv.n++
 }
 
+/**
+ * 为类型t添加位信息到位图bv中
+ */
 func addTypeBits(bv *bitVector, offset uintptr, t *rtype) {
 	if t.ptrdata == 0 {
 		return
@@ -4163,6 +4259,7 @@ func addTypeBits(bv *bitVector, offset uintptr, t *rtype) {
 	switch Kind(t.kind & kindMask) {
 	case Chan, Func, Map, Ptr, Slice, String, UnsafePointer:
 		// 1 pointer at start of representation
+		// 表示开始时有1个指针
 		for bv.n < uint32(offset/uintptr(ptrSize)) {
 			bv.append(0)
 		}
@@ -4170,6 +4267,7 @@ func addTypeBits(bv *bitVector, offset uintptr, t *rtype) {
 
 	case Interface:
 		// 2 pointers
+		// 两个指针
 		for bv.n < uint32(offset/uintptr(ptrSize)) {
 			bv.append(0)
 		}
@@ -4178,6 +4276,7 @@ func addTypeBits(bv *bitVector, offset uintptr, t *rtype) {
 
 	case Array:
 		// repeat inner type
+		// 递归处理每个元素
 		tt := (*arrayType)(unsafe.Pointer(t))
 		for i := 0; i < int(tt.len); i++ {
 			addTypeBits(bv, offset+uintptr(i)*tt.elem.size, tt.elem)
@@ -4185,6 +4284,7 @@ func addTypeBits(bv *bitVector, offset uintptr, t *rtype) {
 
 	case Struct:
 		// apply fields
+		// 递归处理每个字段
 		tt := (*structType)(unsafe.Pointer(t))
 		for i := range tt.fields {
 			f := &tt.fields[i]
