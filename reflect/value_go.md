@@ -398,13 +398,18 @@ func (v Value) Bytes() []byte {
 	if v.typ.Elem().Kind() != Uint8 {
 		panic("reflect.Value.Bytes of non-byte slice")
 	}
-	// Slice is always bigger than a word; assume flagIndir已经被设置值.
-	// 切片总是比字（word）大； 假设flagIndir是。
+	// Slice is always bigger than a word; assume flagIndir.
+	// 切片总是比字（word）大； 假设flagIndir已经被设置值。
 	return *(*[]byte)(v.ptr)
 }
 
 // runes returns v's underlying value.
 // It panics if v's underlying value is not a slice of runes (int32s).
+/**
+ * runes返回v的底层值。如果v的底层值不是一小段符文（int32s），它将惊慌。
+ * @param 
+ * @return 
+ **/
 func (v Value) runes() []rune {
 	v.mustBe(Slice)
 	if v.typ.Elem().Kind() != Int32 {
@@ -419,6 +424,11 @@ func (v Value) runes() []rune {
 // an element of a slice, an element of an addressable array,
 // a field of an addressable struct, or the result of dereferencing a pointer.
 // If CanAddr returns false, calling Addr will panic.
+/**
+ * CanAddr报告是否可以通过Addr获取值的地址。
+ * 这样的值称为可寻址的。 如果值是切片的元素，可寻址数组的元素，可寻址结构的字段或取消引用指针的结果，则该值是可寻址的。
+ * 如果CanAddr返回false，则调用Addr会引起恐慌。
+ **/
 func (v Value) CanAddr() bool {
 	return v.flag&flagAddr != 0
 }
@@ -428,6 +438,13 @@ func (v Value) CanAddr() bool {
 // obtained by the use of unexported struct fields.
 // If CanSet returns false, calling Set or any type-specific
 // setter (e.g., SetBool, SetInt) will panic.
+/**
+ * CanSet报告v的值是否可以更改。
+ * 仅当值是可寻址的并且不是通过使用未导出的结构字段获得的，才可以更改它。
+ * 如果CanSet返回false，则调用Set或任何特定于类型的setter（例如SetBool，SetInt）都会引起恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) CanSet() bool {
 	return v.flag&(flagAddr|flagRO) == flagAddr
 }
@@ -440,6 +457,16 @@ func (v Value) CanSet() bool {
 // type of the function's corresponding input parameter.
 // If v is a variadic function, Call creates the variadic slice parameter
 // itself, copying in the corresponding values.
+/**
+ * Call使用输入参数调用函数v。
+ * 例如，如果len(in)== 3，则v.Call(in)表示Go调用v(in[0], in[1], in[2])。
+ * 如果v的Kind不是Func，则Call方法引起恐慌。
+ * 将输出结果作为Value切片返回。
+ * 和Go一样，每个输入参数必须可分配给函数相应输入参数的类型。
+ * 如果v是可变参数函数，则Call会自己创建可变参数切片参数，并复制相应的值。
+ * @param
+ * @return
+ **/
 func (v Value) Call(in []Value) []Value {
 	v.mustBe(Func)
 	v.mustBeExported()
@@ -453,6 +480,15 @@ func (v Value) Call(in []Value) []Value {
 // It returns the output results as Values.
 // As in Go, each input argument must be assignable to the
 // type of the function's corresponding input parameter.
+/**
+ * CallSlice使用输入参数in调用可变参数函数v，将切片in [len(in)-1]分配给v的最终可变参数。
+ * 例如，如果len(in) == 3，则v.CallSlice(in)表示Go调用v(in [0]，in [1]，in [2] ...)。
+ * 如果v的Kind不是Func或v不是可变参数，则CallSlice会慌张。
+ * 将输出结果作为Value切片返回。
+ * 和Go一样，每个输入参数必须可分配给函数相应输入参数的类型。
+ * @param
+ * @return
+ **/
 func (v Value) CallSlice(in []Value) []Value {
 	v.mustBe(Func)
 	v.mustBeExported()
@@ -461,6 +497,11 @@ func (v Value) CallSlice(in []Value) []Value {
 
 var callGC bool // for testing; see TestCallMethodJump
 
+/**
+ * 真正的方法调用在这里
+ * @param
+ * @return
+ **/
 func (v Value) call(op string, in []Value) []Value {
 	// Get function pointer, type.
 	t := (*funcType)(unsafe.Pointer(v.typ))
@@ -469,10 +510,10 @@ func (v Value) call(op string, in []Value) []Value {
 		rcvr     Value
 		rcvrtype *rtype
 	)
-	if v.flag&flagMethod != 0 {
+	if v.flag&flagMethod != 0 { // v是方法的接收者
 		rcvr = v
 		rcvrtype, t, fn = methodReceiver(op, v, int(v.flag)>>flagMethodShift)
-	} else if v.flag&flagIndir != 0 {
+	} else if v.flag&flagIndir != 0 { // 有间接指针
 		fn = *(*unsafe.Pointer)(v.ptr)
 	} else {
 		fn = v.ptr
@@ -484,18 +525,18 @@ func (v Value) call(op string, in []Value) []Value {
 
 	isSlice := op == "CallSlice"
 	n := t.NumIn()
-	if isSlice {
-		if !t.IsVariadic() {
+	if isSlice { // CallSlice方法
+		if !t.IsVariadic() { // 必须要有可变参数
 			panic("reflect: CallSlice of non-variadic function")
 		}
-		if len(in) < n {
+		if len(in) < n { // 参数不足
 			panic("reflect: CallSlice with too few input arguments")
 		}
-		if len(in) > n {
+		if len(in) > n { // 参数过多
 			panic("reflect: CallSlice with too many input arguments")
 		}
 	} else {
-		if t.IsVariadic() {
+		if t.IsVariadic() { // 有可变参数
 			n--
 		}
 		if len(in) < n {
@@ -505,17 +546,17 @@ func (v Value) call(op string, in []Value) []Value {
 			panic("reflect: Call with too many input arguments")
 		}
 	}
-	for _, x := range in {
+	for _, x := range in { // 参数都要有效
 		if x.Kind() == Invalid {
 			panic("reflect: " + op + " using zero Value argument")
 		}
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // 对应参数可以赋值
 		if xt, targ := in[i].Type(), t.In(i); !xt.AssignableTo(targ) {
 			panic("reflect: " + op + " using " + xt.String() + " as type " + targ.String())
 		}
 	}
-	if !isSlice && t.IsVariadic() {
+	if !isSlice && t.IsVariadic() { // 非CallSlice方法，且没有可变参数
 		// prepare slice for remaining values
 		m := len(in) - n
 		slice := MakeSlice(t.In(n), m, m)
