@@ -201,15 +201,21 @@ func packEface(v Value) interface{} {
 }
 
 // unpackEface converts the empty interface i to a Value.
+/**
+ * unpackEface将空接口i转换为Value。
+ * @param 接口
+ * @return Value类型
+ **/
 func unpackEface(i interface{}) Value {
 	e := (*emptyInterface)(unsafe.Pointer(&i))
 	// NOTE: don't read e.word until we know whether it is really a pointer or not.
+	// 注意：在我们知道e.word是否真的是指针之前，不要读它。
 	t := e.typ
-	if t == nil {
+	if t == nil { // i对应的类型为空，则不需要设置相关值
 		return Value{}
 	}
 	f := flag(t.Kind())
-	if ifaceIndir(t) {
+	if ifaceIndir(t) { // 设置接口值标记
 		f |= flagIndir
 	}
 	return Value{t, e.word, f}
@@ -218,6 +224,10 @@ func unpackEface(i interface{}) Value {
 // A ValueError occurs when a Value method is invoked on
 // a Value that does not support it. Such cases are documented
 // in the description of each method.
+/**
+ * 在不支持Value的Value方法上调用Value方法时，发生ValueError。
+ * 在每种方法的说明中都记录了这种情况。
+ */
 type ValueError struct {
 	Method string
 	Kind   Kind
@@ -232,8 +242,24 @@ func (e *ValueError) Error() string {
 
 // methodName returns the name of the calling method,
 // assumed to be two stack frames above.
+/**
+ * methodName返回调用方法的名称，假定为上面有两个堆栈帧。
+ */
 func methodName() string {
-	pc, _, _, _ := runtime.Caller(2)
+    /**
+     * func Caller(skip int) (pc uintptr, file string, line int, ok bool)
+     * Caller报告有关调用goroutine堆栈上函数调用的文件和行号信息。
+     * 参数skip是要提升的堆栈帧数，其中0标识Caller的调用者。
+     *（由于历史原因，在Caller和Callers之间，跳过的含义有所不同。）
+     * 返回值报告相应调用文件中的程序计数器，文件名和行号。 如果该信息不可能恢复，
+     * 则ok布尔值为False。
+     */
+	pc, _, _, _ := runtime.Caller(2) // Question: 为什么是2？
+	/**
+	 * 给定程序计数器地址，否则为nil。
+     * 如果pc由于内联而表示多个函数，它将返回一个* Func描述最内部的函数，
+     * 但带有最外部的函数的条目。
+	 */
 	f := runtime.FuncForPC(pc)
 	if f == nil {
 		return "unknown method"
@@ -242,20 +268,26 @@ func methodName() string {
 }
 
 // emptyInterface is the header for an interface{} value.
+/**
+ * emptyInterface是interface{}值的头部。
+ */
 type emptyInterface struct {
 	typ  *rtype
 	word unsafe.Pointer
 }
 
 // nonEmptyInterface is the header for an interface value with methods.
+/**
+ * nonEmptyInterface是带有方法的接口值的头部。
+ */
 type nonEmptyInterface struct {
 	// see ../runtime/iface.go:/Itab
 	itab *struct {
-		ityp *rtype // static interface type
-		typ  *rtype // dynamic concrete type
-		hash uint32 // copy of typ.hash
-		_    [4]byte
-		fun  [100000]unsafe.Pointer // method table
+		ityp *rtype // static interface type // 静态接口类型
+		typ  *rtype // dynamic concrete type // 动态创建类型
+		hash uint32 // copy of typ.hash      // hash值
+		_    [4]byte                         // Question: 用于对齐？
+		fun  [100000]unsafe.Pointer // method table  // Question: 最多保存10W个方法？
 	}
 	word unsafe.Pointer
 }
@@ -266,8 +298,16 @@ type nonEmptyInterface struct {
 // the very clear v.mustBe(Bool) and have it compile into
 // v.flag.mustBe(Bool), which will only bother to copy the
 // single important word for the receiver.
+/**
+ * 如果f的种类不是期望类型，则必须惊慌。
+ * 将此方法设置为基于标志而不是基于Value的方法（并在Value中嵌入flag标志）
+ * 意味着我们可以编写非常清晰的v.mustBe（Bool）并将其编译为v.flag.mustBe（Bool），
+ * 唯一麻烦是只需要为接收者复制一个重要的单词。
+ */
 func (f flag) mustBe(expected Kind) {
 	// TODO(mvdan): use f.kind() again once mid-stack inlining gets better
+	// TODO(mvdan): mid-stack的内联变得更好后，再次使用f.kind()
+    // Question: mid-stack是什么？
 	if Kind(f&flagKindMask) != expected {
 		panic(&ValueError{methodName(), f.kind()})
 	}
@@ -275,7 +315,11 @@ func (f flag) mustBe(expected Kind) {
 
 // mustBeExported panics if f records that the value was obtained using
 // an unexported field.
+/**
+ * 如果f记录了使用未导出字段获得的值，则必须惊慌。
+ */
 func (f flag) mustBeExported() {
+    // Enhance: mustBeExported和mustBeExportedSlow两个方法一样，
 	if f == 0 || f&flagRO != 0 {
 		f.mustBeExportedSlow()
 	}
@@ -293,6 +337,10 @@ func (f flag) mustBeExportedSlow() {
 // mustBeAssignable panics if f records that the value is not assignable,
 // which is to say that either it was obtained using an unexported field
 // or it is not addressable.
+/**
+ * 如果f记录该值不可分配，则mustBeAssignable会发生panic，
+ * 这意味着它是使用未导出的字段获取的，或者它是不可寻址的。
+ */
 func (f flag) mustBeAssignable() {
 	if f&flagRO != 0 || f&flagAddr == 0 {
 		f.mustBeAssignableSlow()
@@ -304,6 +352,7 @@ func (f flag) mustBeAssignableSlow() {
 		panic(&ValueError{methodName(), Invalid})
 	}
 	// Assignable if addressable and not read-only.
+	// 如果可寻址且不是只读，则可分配。
 	if f&flagRO != 0 {
 		panic("reflect: " + methodName() + " using value obtained using unexported field")
 	}
@@ -317,28 +366,40 @@ func (f flag) mustBeAssignableSlow() {
 // Addr is typically used to obtain a pointer to a struct field
 // or slice element in order to call a method that requires a
 // pointer receiver.
+/**
+ * Addr返回表示v地址的指针值。
+ * 如果CanAddr（）返回false，则会感到恐慌。
+ * Addr通常用于获取指向struct字段或slice元素的指针，以便调用需要指针接收器的方法。
+ */
 func (v Value) Addr() Value {
 	if v.flag&flagAddr == 0 {
 		panic("reflect.Value.Addr of unaddressable value")
 	}
-	return Value{v.typ.ptrTo(), v.ptr, v.flag.ro() | flag(Ptr)}
+	return Value{v.typ.ptrTo(), v.ptr, v.flag.ro() | flag(Ptr)} // Ptr是指标类型的类型值
 }
 
 // Bool returns v's underlying value.
 // It panics if v's kind is not Bool.
+/**
+ * Bool返回v的基础值，如果v的种类不是Bool则会恐慌。
+ */
 func (v Value) Bool() bool {
 	v.mustBe(Bool)
-	return *(*bool)(v.ptr)
+	return *(*bool)(v.ptr) // 先转成bool类型指针，再取值
 }
 
 // Bytes returns v's underlying value.
 // It panics if v's underlying value is not a slice of bytes.
+/**
+ * 字节返回v的底层值，如果v的底层值不是字节的片段则恐慌。
+ */
 func (v Value) Bytes() []byte {
 	v.mustBe(Slice)
 	if v.typ.Elem().Kind() != Uint8 {
 		panic("reflect.Value.Bytes of non-byte slice")
 	}
-	// Slice is always bigger than a word; assume flagIndir.
+	// Slice is always bigger than a word; assume flagIndir已经被设置值.
+	// 切片总是比字（word）大； 假设flagIndir是。
 	return *(*[]byte)(v.ptr)
 }
 
