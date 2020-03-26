@@ -558,12 +558,13 @@ func (v Value) call(op string, in []Value) []Value {
 	}
 	if !isSlice && t.IsVariadic() { // 非CallSlice方法，且没有可变参数
 		// prepare slice for remaining values
+		// 将[len(in)-n, len(n)-1]位置的元素装入slice作为最后一个参数
 		m := len(in) - n
 		slice := MakeSlice(t.In(n), m, m)
 		elem := t.In(n).Elem()
 		for i := 0; i < m; i++ {
 			x := in[n+i]
-			if xt := x.Type(); !xt.AssignableTo(elem) {
+			if xt := x.Type(); !xt.AssignableTo(elem) { // n位置之后的元素必须是可赋值成elem
 				panic("reflect: cannot use " + xt.String() + " as type " + elem.String() + " in " + op)
 			}
 			slice.Index(i).Set(x)
@@ -575,30 +576,36 @@ func (v Value) call(op string, in []Value) []Value {
 	}
 
 	nin := len(in)
-	if nin != t.NumIn() {
+	if nin != t.NumIn() { // 入参个数和需要的不相同
 		panic("reflect.Value.Call: wrong argument count")
 	}
 	nout := t.NumOut()
 
 	// Compute frame type.
+	// 计算帧类型
 	frametype, _, retOffset, _, framePool := funcLayout(t, rcvrtype)
 
 	// Allocate a chunk of memory for frame.
+	// 为帧分匹配大片内存
 	var args unsafe.Pointer
-	if nout == 0 {
+	if nout == 0 { // 没有出参
 		args = framePool.Get().(unsafe.Pointer)
 	} else {
 		// Can't use pool if the function has return values.
 		// We will leak pointer to args in ret, so its lifetime is not scoped.
+		// 如果函数具有返回值，则不能使用缓存池。
+        // 我们将在ret中泄漏指向args的指针，因此其生存期不受限制。
 		args = unsafe_New(frametype)
 	}
 	off := uintptr(0)
 
 	// Copy inputs into args.
+	// 将输入复制到args。
 	if rcvrtype != nil {
 		storeRcvr(rcvr, args)
 		off = ptrSize
 	}
+	// 计算偏移量off
 	for i, v := range in {
 		v.mustBeExported()
 		targ := t.In(i).(*rtype)
@@ -609,6 +616,8 @@ func (v Value) call(op string, in []Value) []Value {
 			// Not safe to compute args+off pointing at 0 bytes,
 			// because that might point beyond the end of the frame,
 			// but we still need to call assignTo to check assignability.
+			// 计算指向0字节的args + off并不安全，因为它可能指向超出帧末尾的位置，
+			// 但是我们仍然需要调用assignTo来检查可分配性。
 			v.assignTo("reflect.Value.Call", targ, nil)
 			continue
 		}
@@ -623,6 +632,7 @@ func (v Value) call(op string, in []Value) []Value {
 	}
 
 	// Call.
+	// 进行方法调用
 	call(frametype, fn, args, uint32(frametype.size), uint32(retOffset))
 
 	// For testing; see TestCallMethodJump.
@@ -631,16 +641,19 @@ func (v Value) call(op string, in []Value) []Value {
 	}
 
 	var ret []Value
-	if nout == 0 {
+	if nout == 0 { // 没有出参
 		typedmemclr(frametype, args)
 		framePool.Put(args)
-	} else {
+	} else { // 包装返回值
 		// Zero the now unused input area of args,
 		// because the Values returned by this function contain pointers to the args object,
 		// and will thus keep the args object alive indefinitely.
+		// 将现在未使用的args输入区域归零，因为此函数返回的值包含指向args对象的指针，
+		// 因此将使args对象无限期地保持活动状态。
 		typedmemclrpartial(frametype, args, 0, retOffset)
 
 		// Wrap Values around return values in args.
+		// args中的返回值进行包装
 		ret = make([]Value, nout)
 		off = retOffset
 		for i := 0; i < nout; i++ {
@@ -654,9 +667,12 @@ func (v Value) call(op string, in []Value) []Value {
 				// if any result is live, they are all live.
 				// (And the space for the args is live as well, but as we've
 				// cleared that space it isn't as big a deal.)
+				// 注意：这确实会导致结果之间的错误共享-如果有任何结果存活，则它们都是在存活。
+				// （并且用于args的空间也可以使用，但是正如我们已经清除的那样，空间并不大。）
 			} else {
 				// For zero-sized return value, args+off may point to the next object.
 				// In this case, return the zero value instead.
+				// 对于零大小的返回值，args+off可能指向下一个对象。 在这种情况下，请返回零值。
 				ret[i] = Zero(tv)
 			}
 			off += tv.Size()
