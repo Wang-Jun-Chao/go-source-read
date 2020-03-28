@@ -699,22 +699,43 @@ func (v Value) call(op string, in []Value) []Value {
 // frame is a pointer to the arguments to that closure on the stack.
 // retValid points to a boolean which should be set when the results
 // section of frame is set.
+/**
+ * callReflect是MakeFunc返回的函数使用的调用实现。 在许多方面，它与上面的Value.call方法相反。
+ * 上面的方法将使用Values的调用转换为具有具体参数框架的函数的调用，
+ * 而callReflect将具有具体参数框架的函数调用转换为使用Values的调用。
+ * 它在此文件中，因此可以位于上面的call方法旁边。
+ *  MakeFunc实现的其余部分位于makefunc.go中。
+ *
+ * 注意：此函数必须在生成的代码中标记为“wrapper”，以便链接器可以使其正常工作，以免发生混乱和恢复。
+ *  gc编译器知道这样做的名称是“reflect.callReflect”。
+ *
+ *  ctxt是MakeFunc生成的“closure”。
+ *  frame是指向堆栈上该闭包的参数的指针。
+ *  retValid指向一个布尔值，当设置框架的结果部分时应设置此布尔值。
+ * @param
+ * @param
+ * @param retValid 指标返回值是否有效
+ **/
 func callReflect(ctxt *makeFuncImpl, frame unsafe.Pointer, retValid *bool) {
 	ftyp := ctxt.ftyp
 	f := ctxt.fn
 
 	// Copy argument frame into Values.
+	// 将参数框帧复制到Value结构体中。
 	ptr := frame
-	off := uintptr(0)
+	off := uintptr(0) // 计算偏移量off
 	in := make([]Value, 0, int(ftyp.inCount))
-	for _, typ := range ftyp.in() {
+	for _, typ := range ftyp.in() { // 处理入参
 		off += -off & uintptr(typ.align-1)
 		v := Value{typ, nil, flag(typ.Kind())}
-		if ifaceIndir(typ) {
+		if ifaceIndir(typ) { // 有间接指针
 			// value cannot be inlined in interface data.
 			// Must make a copy, because f might keep a reference to it,
 			// and we cannot let f keep a reference to the stack frame
 			// after this function returns, not even a read-only reference.
+			// 不能在接口数据中内联值。
+            // 必须创建一个副本，因为f可能会保留对它的引用，并且在此函数返回后，
+            // 我们不能让f保留对堆栈帧的引用，甚至不能是只读引用。
 			v.ptr = unsafe_New(typ)
 			if typ.size > 0 {
 				typedmemmove(typ, v.ptr, add(ptr, off, "typ.size > 0"))
@@ -728,13 +749,15 @@ func callReflect(ctxt *makeFuncImpl, frame unsafe.Pointer, retValid *bool) {
 	}
 
 	// Call underlying function.
+	// 调用底层函数
 	out := f(in)
 	numOut := ftyp.NumOut()
-	if len(out) != numOut {
+	if len(out) != numOut { // 出参和实际不同
 		panic("reflect: wrong return count from function created by MakeFunc")
 	}
 
 	// Copy results back into argument frame.
+	// 将结果拷贝回参数帧
 	if numOut > 0 {
 		off += -off & (ptrSize - 1)
 		for i, typ := range ftyp.out() {
@@ -756,9 +779,12 @@ func callReflect(ctxt *makeFuncImpl, frame unsafe.Pointer, retValid *bool) {
 			// Convert v to type typ if v is assignable to a variable
 			// of type t in the language spec.
 			// See issue 28761.
+			// 如果在语言规范中v可分配给类型t的变量，则将v转换为typ类型。
+            // 参见问题28761。
 			v = v.assignTo("reflect.MakeFunc", typ, addr)
 
 			// We are writing to stack. No write barrier.
+			// 我们正在写堆栈。 没有写屏障。
 			if v.flag&flagIndir != 0 {
 				memmove(addr, v.ptr, typ.size)
 			} else {
@@ -770,17 +796,23 @@ func callReflect(ctxt *makeFuncImpl, frame unsafe.Pointer, retValid *bool) {
 
 	// Announce that the return values are valid.
 	// After this point the runtime can depend on the return values being valid.
+	// 声明返回值有效。
+    // 在此之后，运行时可以依赖于有效的返回值。
 	*retValid = true
 
 	// We have to make sure that the out slice lives at least until
 	// the runtime knows the return values are valid. Otherwise, the
 	// return values might not be scanned by anyone during a GC.
 	// (out would be dead, and the return slots not yet alive.)
+	// 我们必须确保out输出切片至少存在，直到运行时知道返回值有效为止。
+	// 否则，任何人都可能在GC期间不扫描返回值。（输出将失效，返回slots还没有激活。）
 	runtime.KeepAlive(out)
 
 	// runtime.getArgInfo expects to be able to find ctxt on the
 	// stack when it finds our caller, makeFuncStub. Make sure it
 	// doesn't get garbage collected.
+	// runtime.getArgInfo期望能够在找到我们的调用者makeFuncStub时在堆栈上找到ctxt。
+	// 需求确保没有收集垃圾。
 	runtime.KeepAlive(ctxt)
 }
 
@@ -791,15 +823,23 @@ func callReflect(ctxt *makeFuncImpl, frame unsafe.Pointer, retValid *bool) {
 // The return value rcvrtype gives the method's actual receiver type.
 // The return value t gives the method type signature (without the receiver).
 // The return value fn is a pointer to the method code.
+/**
+ * methodReceiver返回有关v描述的接收者的信息。值v可能会或可能不会设置flagMethod位，因此不应使用在v.flag中缓存的种类。
+ * 返回值rcvrtype给出了方法的实际接收者类型。
+ * 返回值t给出方法类型签名（没有接收者）。
+ * 返回值fn是方法代码的指针。
+ * @param
+ * @return
+ **/
 func methodReceiver(op string, v Value, methodIndex int) (rcvrtype *rtype, t *funcType, fn unsafe.Pointer) {
 	i := methodIndex
-	if v.typ.Kind() == Interface {
+	if v.typ.Kind() == Interface { // 接口类型
 		tt := (*interfaceType)(unsafe.Pointer(v.typ))
-		if uint(i) >= uint(len(tt.methods)) {
+		if uint(i) >= uint(len(tt.methods)) { // 参数个数判断
 			panic("reflect: internal error: invalid method index")
 		}
 		m := &tt.methods[i]
-		if !tt.nameOff(m.name).isExported() {
+		if !tt.nameOff(m.name).isExported() { // 非导出方法
 			panic("reflect: " + op + " of unexported method")
 		}
 		iface := (*nonEmptyInterface)(v.ptr)
@@ -809,7 +849,7 @@ func methodReceiver(op string, v Value, methodIndex int) (rcvrtype *rtype, t *fu
 		rcvrtype = iface.itab.typ
 		fn = unsafe.Pointer(&iface.itab.fun[i])
 		t = (*funcType)(unsafe.Pointer(tt.typeOff(m.typ)))
-	} else {
+	} else { // 非接口类型
 		rcvrtype = v.typ
 		ms := v.typ.exportedMethods()
 		if uint(i) >= uint(len(ms)) {
