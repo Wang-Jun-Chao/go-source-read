@@ -105,6 +105,19 @@ type Value struct {
 
 type flag uintptr
 
+/**
+ * flag类型是uintptr，此类型文档并未说明是多少位，只是说位数足够多，可以纳任何指针的位模式
+ * 为了方便解理，这里假设uintptr是uint32
+ * flag的位模式分成几组，从高位到底位：[31:10][9][8][7][6][5][4:0]
+ * [4:0]: 第0~4位：共计5位，用于表示值类型，最多可表示32种类型，值类型参见同包下的，type.go Kind枚举
+ * [5]: 第5位：只读类型，设置为1表示：通过未导出的未嵌入字段获取
+ * [6]: 第6位：只读类型，设置为1表示：通过未导出的嵌入式字段获取
+ * [7]: 第7位：间接指针标记，设置为1表示：Value的val属性保存指向数据的指针
+ * [8]: 第8位：可取址标记，设置为1表示：可取址，并且暗示flagIndir已经设置成1
+ * [9]: 第9位：方法标记，对于Value类型，第9位为1表示其是方法类型，
+ * [31:10]: 第10~31位：只对于Value是方法类型有用，用于表示第i个方法，将i<<flagMethodShift(10)位得到
+ *
+ */
 const (
 	flagKindWidth        = 5 // there are 27 kinds // 种类的宽度，具体种类在type.go文件中
 	flagKindMask    flag = 1<<flagKindWidth - 1 // 数据类型的掩码
@@ -113,7 +126,7 @@ const (
 	flagIndir       flag = 1 << 7 // val保存指向数据的指针，val指的是Value中的ptr属性
 	flagAddr        flag = 1 << 8 // v.CanAddr为true（暗示flagIndir），v指Value的实例
 	flagMethod      flag = 1 << 9 // v是方法值，v指Value的实例
-	flagMethodShift      = 10
+	flagMethodShift      = 10 // 计算是第几个方法需要的位移数
 	flagRO          flag = flagStickyRO | flagEmbedRO // 表示是否只读
 )
 
@@ -287,7 +300,7 @@ type nonEmptyInterface struct {
 		typ  *rtype // dynamic concrete type // 动态创建类型
 		hash uint32 // copy of typ.hash      // hash值
 		_    [4]byte                         // Question: 用于对齐？
-		fun  [100000]unsafe.Pointer // method table  // Question: 最多保存10W个方法？
+		fun  [100000]unsafe.Pointer // method table*  Question: 最多保存10W个方法？
 	}
 	word unsafe.Pointer
 }
@@ -1549,7 +1562,7 @@ func (v Value) Len() int {
 		return maplen(v.pointer())
 	case Slice:
 		// Slice is bigger than a word; assume flagIndir.
-	    // 切片大于一个字； 假设flagIndir已经被设置值。
+	  *  切片大于一个字； 假设flagIndir已经被设置值。
 		return (*sliceHeader)(v.ptr).Len
 	case String:
 		// String is bigger than a word; assume flagIndir.
@@ -1692,6 +1705,12 @@ func (it *MapIter) Value() Value {
 // Next advances the map iterator and reports whether there is another
 // entry. It returns false when the iterator is exhausted; subsequent
 // calls to Key, Value, or Next will panic.
+/**
+ * Next前进map迭代器并报告是否还有另一个条目。 迭代器用尽时，它返回false；否则，返回false。
+ * 子序列随后调用“键”，“值”或“下一步”将引起惊慌。
+ * @param
+ * @return
+ **/
 func (it *MapIter) Next() bool {
 	if it.it == nil {
 		it.it = mapiterinit(it.m.typ, it.m.pointer())
@@ -1720,6 +1739,24 @@ func (it *MapIter) Next() bool {
 //		...
 //	}
 //
+/**
+ * MapRange返回地图的范围迭代器。
+ * 如果v的Kind不是Map，它会感到恐慌。
+ *
+ * 调用Next前进迭代器，并调用Key/Value访问每个条目。
+ * 迭代器用尽时，next返回false。
+ * MapRange遵循与range语句相同的迭代语义。
+ *
+ * 示例：
+ *  iter := reflect.ValueOf(m).MapRange()
+ *      for iter.Next() {
+ *      k := iter.Key()
+ *      v := iter.Value()
+ *      ...
+ *  }
+ * @param
+ * @return
+ **/
 func (v Value) MapRange() *MapIter {
 	v.mustBe(Map)
 	return &MapIter{m: v}
@@ -1727,10 +1764,16 @@ func (v Value) MapRange() *MapIter {
 
 // copyVal returns a Value containing the map key or value at ptr,
 // allocating a new variable as needed.
+/**
+ * copyVal返回一个值，该值包含ptr处的映射键或值，并根据需要分配一个新变量。
+ * @param
+ * @return
+ **/
 func copyVal(typ *rtype, fl flag, ptr unsafe.Pointer) Value {
-	if ifaceIndir(typ) {
+	if ifaceIndir(typ) { // 接口间接指针
 		// Copy result so future changes to the map
 		// won't change the underlying value.
+		// 复制结果，以便将来对map所做的更改不会更改基础值。
 		c := unsafe_New(typ)
 		typedmemmove(typ, c, ptr)
 		return Value{typ, c, fl | flagIndir}
@@ -1742,6 +1785,13 @@ func copyVal(typ *rtype, fl flag, ptr unsafe.Pointer) Value {
 // The arguments to a Call on the returned function should not include
 // a receiver; the returned function will always use v as the receiver.
 // Method panics if i is out of range or if v is a nil interface value.
+/**
+ * 方法返回与v的第i个方法相对应的函数值。
+ * 返回函数上的Call的参数不应包含接收方； 返回的函数将始终使用v作为接收者。
+ * 如果i超出范围或v是一个nil接口值，则方法将出现恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) Method(i int) Value {
 	if v.typ == nil {
 		panic(&ValueError{"reflect.Value.Method", Invalid})
@@ -1749,16 +1799,24 @@ func (v Value) Method(i int) Value {
 	if v.flag&flagMethod != 0 || uint(i) >= uint(v.typ.NumMethod()) {
 		panic("reflect: Method index out of range")
 	}
-	if v.typ.Kind() == Interface && v.IsNil() {
+	if v.typ.Kind() == Interface && v.IsNil() { // 空接口
 		panic("reflect: Method on nil interface value")
 	}
-	fl := v.flag & (flagStickyRO | flagIndir) // Clear flagEmbedRO
-	fl |= flag(Func)
-	fl |= flag(i)<<flagMethodShift | flagMethod
+
+	// 设置标记
+	fl := v.flag & (flagStickyRO | flagIndir) // Clear flagEmbedRO // 清除flagEmbedRO标记
+	fl |= flag(Func) // 添加函数类型标记
+	fl |= flag(i)<<flagMethodShift | flagMethod // 添加方法标记，并且将i添加到标记中
+
 	return Value{v.typ, v.ptr, fl}
 }
 
 // NumMethod returns the number of exported methods in the value's method set.
+/**
+ * NumMethod返回值的方法集中导出的方法的数量。
+ * @param
+ * @return
+ **/
 func (v Value) NumMethod() int {
 	if v.typ == nil {
 		panic(&ValueError{"reflect.Value.NumMethod", Invalid})
@@ -1774,11 +1832,16 @@ func (v Value) NumMethod() int {
 // The arguments to a Call on the returned function should not include
 // a receiver; the returned function will always use v as the receiver.
 // It returns the zero Value if no method was found.
+/**
+ * MethodByName返回与具有给定名称的v方法相对应的函数值。
+ * 返回函数上的Call的参数不应包含接收方； 返回的函数将始终使用v作为接收者。
+ * 如果未找到任何方法，则返回零值。
+ */
 func (v Value) MethodByName(name string) Value {
 	if v.typ == nil {
 		panic(&ValueError{"reflect.Value.MethodByName", Invalid})
 	}
-	if v.flag&flagMethod != 0 {
+	if v.flag&flagMethod != 0 { // value本身是方法类型
 		return Value{}
 	}
 	m, ok := v.typ.MethodByName(name)
@@ -1790,6 +1853,12 @@ func (v Value) MethodByName(name string) Value {
 
 // NumField returns the number of fields in the struct v.
 // It panics if v's Kind is not Struct.
+/**
+ * NumField返回结构v中的字段数。
+ * 如果v的Kind不是Struct，则会引起恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) NumField() int {
 	v.mustBe(Struct)
 	tt := (*structType)(unsafe.Pointer(v.typ))
@@ -1798,6 +1867,12 @@ func (v Value) NumField() int {
 
 // OverflowComplex reports whether the complex128 x cannot be represented by v's type.
 // It panics if v's Kind is not Complex64 or Complex128.
+/**
+ * OverflowComplex报告complex128 x是否不能用v的类型表示。
+ * 如果v的Kind不是Complex64或Complex128，则会发生恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) OverflowComplex(x complex128) bool {
 	k := v.kind()
 	switch k {
@@ -1811,6 +1886,10 @@ func (v Value) OverflowComplex(x complex128) bool {
 
 // OverflowFloat reports whether the float64 x cannot be represented by v's type.
 // It panics if v's Kind is not Float32 or Float64.
+/**
+ * OverflowFloat报告float64 x是否不能用v的类型表示。
+ * 如果v的Kind不是Float32或Float64，则会出现恐慌。
+ */
 func (v Value) OverflowFloat(x float64) bool {
 	k := v.kind()
 	switch k {
@@ -1831,12 +1910,18 @@ func overflowFloat32(x float64) bool {
 
 // OverflowInt reports whether the int64 x cannot be represented by v's type.
 // It panics if v's Kind is not Int, Int8, Int16, Int32, or Int64.
+/**
+ * OverflowInt报告int64 x是否不能用v的类型表示。
+ * 如果v的Kind不是Int，Int8，Int16，Int32或Int64，则会发生恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) OverflowInt(x int64) bool {
 	k := v.kind()
 	switch k {
 	case Int, Int8, Int16, Int32, Int64:
 		bitSize := v.typ.size * 8
-		trunc := (x << (64 - bitSize)) >> (64 - bitSize)
+		trunc := (x << (64 - bitSize)) >> (64 - bitSize // 先左移清除高位，右移还原低位
 		return x != trunc
 	}
 	panic(&ValueError{"reflect.Value.OverflowInt", v.kind()})
@@ -1844,12 +1929,18 @@ func (v Value) OverflowInt(x int64) bool {
 
 // OverflowUint reports whether the uint64 x cannot be represented by v's type.
 // It panics if v's Kind is not Uint, Uintptr, Uint8, Uint16, Uint32, or Uint64.
+/**
+ * OverflowUint报告uint64 x是否不能用v的类型表示。
+ * 如果v的Kind不是Uint，Uintptr，Uint8，Uint16，Uint32或Uint64，则会出现恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) OverflowUint(x uint64) bool {
 	k := v.kind()
 	switch k {
 	case Uint, Uintptr, Uint8, Uint16, Uint32, Uint64:
 		bitSize := v.typ.size * 8
-		trunc := (x << (64 - bitSize)) >> (64 - bitSize)
+		trunc := (x << (64 - bitSize)) >> (64 - bitSize) // 先左移清除高位，右移还原低位
 		return x != trunc
 	}
 	panic(&ValueError{"reflect.Value.OverflowUint", v.kind()})
@@ -1874,6 +1965,23 @@ func (v Value) OverflowUint(x uint64) bool {
 // If v's Kind is Slice, the returned pointer is to the first
 // element of the slice. If the slice is nil the returned value
 // is 0.  If the slice is empty but non-nil the return value is non-zero.
+/**
+ * go：nocheckptr
+ * 这样可以防止在启用-d = checkptr时内联Value.Pointer，从而确保cmd/compile可以识别
+ * unsafe.Pointer(v.Pointer())并产生异常。
+ *
+ * 指针以uintptr的形式返回v的值。
+ * 它返回uintptr而不是unsafe.Pointer，因此使用反射的代码无法获取unsafe.Pointers而不显式导入unsafe包。
+ * 如果v的Kind不是Chan，Func，Map，Ptr，Slice或UnsafePointer，它会感到恐慌。
+ *
+ * 如果v的Kind为Func，则返回的指针是底层代码指针，但不一定足以唯一地标识单个函数。
+ * 唯一的保证是，当且仅当v为nil func值时，结果为零。
+ *
+ * 如果v的Kind为Slice，则返回的指针指向该切片的第一个元素。 如果切片为nil，则返回值为0。
+ * 如果切片为空但非nil，则返回值为非零。
+ * @param
+ * @return
+ **/
 func (v Value) Pointer() uintptr {
 	// TODO: deprecate
 	k := v.kind()
@@ -1881,19 +1989,23 @@ func (v Value) Pointer() uintptr {
 	case Chan, Map, Ptr, UnsafePointer:
 		return uintptr(v.pointer())
 	case Func:
-		if v.flag&flagMethod != 0 {
+		if v.flag&flagMethod != 0 { // v本身是方法类型
 			// As the doc comment says, the returned pointer is an
 			// underlying code pointer but not necessarily enough to
 			// identify a single function uniquely. All method expressions
 			// created via reflect have the same underlying code pointer,
 			// so their Pointers are equal. The function used here must
 			// match the one used in makeMethodValue.
+			// 如文档注释所述，返回的指针是底层代码指针，但不一定足以唯一地标识单个函数。
+			// 通过反射创建的所有方法表达式都具有相同的基础代码指针，因此它们的指针相等。
+			// 这里使用的函数必须与makeMethodValue中使用的函数匹配。
 			f := methodValueCall
-			return **(**uintptr)(unsafe.Pointer(&f))
+			return **(**uintptr)(unsafe.Pointer(&f)) // 间接指针取值
 		}
 		p := v.pointer()
 		// Non-nil func value points at data block.
 		// First word of data block is actual code.
+		// 非nil func值指向数据块。 数据块的第一个字是实际代码。
 		if p != nil {
 			p = *(*unsafe.Pointer)(p)
 		}
@@ -1910,6 +2022,14 @@ func (v Value) Pointer() uintptr {
 // The receive blocks until a value is ready.
 // The boolean value ok is true if the value x corresponds to a send
 // on the channel, false if it is a zero value received because the channel is closed.
+/**
+ * Recv从通道v接收并返回一个值。
+ * 如果v的类型（Kind）不是通道（Chan），就会引起恐慌。
+ * 接收阻止，直到准备好值为止。
+ * 如果值x对应于通道上的发送的值，则布尔值ok为true，如果由于通道关闭而接收到零值，则为false。
+ * @param
+ * @return 
+ **/
 func (v Value) Recv() (x Value, ok bool) {
 	v.mustBe(Chan)
 	v.mustBeExported()
@@ -1918,15 +2038,20 @@ func (v Value) Recv() (x Value, ok bool) {
 
 // internal recv, possibly non-blocking (nb).
 // v is known to be a channel.
+/**
+ * 内部recv方法，可能是非阻塞（nb）。 v被称为通道。
+ * @param
+ * @return
+ **/
 func (v Value) recv(nb bool) (val Value, ok bool) {
 	tt := (*chanType)(unsafe.Pointer(v.typ))
-	if ChanDir(tt.dir)&RecvDir == 0 {
+	if ChanDir(tt.dir)&RecvDir == 0 { // 非接收通道
 		panic("reflect: recv on send-only channel")
 	}
 	t := tt.elem
 	val = Value{t, nil, flag(t.Kind())}
-	var p unsafe.Pointer
-	if ifaceIndir(t) {
+	var p unsafe.Pointer // p是一个间接指针
+	if ifaceIndir(t) { // 非间接指针
 		p = unsafe_New(t)
 		val.ptr = p
 		val.flag |= flagIndir
@@ -1934,7 +2059,7 @@ func (v Value) recv(nb bool) (val Value, ok bool) {
 		p = unsafe.Pointer(&val.ptr)
 	}
 	selected, ok := chanrecv(v.pointer(), nb, p)
-	if !selected {
+	if !selected { // 没有收到返回值，就返回空
 		val = Value{}
 	}
 	return
@@ -1943,6 +2068,13 @@ func (v Value) recv(nb bool) (val Value, ok bool) {
 // Send sends x on the channel v.
 // It panics if v's kind is not Chan or if x's type is not the same type as v's element type.
 // As in Go, x's value must be assignable to the channel's element type.
+/**
+ * Send方法在通道v上发送x。
+ * 如果v的种类不是Chan或x的类型与v的元素类型不同，则会引起恐慌。
+ * 和Go一样，x的值必须可分配给通道的元素类型。
+ * @param
+ * @return
+ **/
 func (v Value) Send(x Value) {
 	v.mustBe(Chan)
 	v.mustBeExported()
@@ -1951,15 +2083,20 @@ func (v Value) Send(x Value) {
 
 // internal send, possibly non-blocking.
 // v is known to be a channel.
+/**
+ * 内部发送方法，可能是非阻塞的。v是一个通道。
+ * @param
+ * @return
+ **/
 func (v Value) send(x Value, nb bool) (selected bool) {
 	tt := (*chanType)(unsafe.Pointer(v.typ))
-	if ChanDir(tt.dir)&SendDir == 0 {
+	if ChanDir(tt.dir)&SendDir == 0 { // 非发送通道
 		panic("reflect: send on recv-only channel")
 	}
 	x.mustBeExported()
 	x = x.assignTo("reflect.Value.Send", tt.elem, nil)
-	var p unsafe.Pointer
-	if x.flag&flagIndir != 0 {
+	var p unsafe.Pointer // p是一个间接指针
+	if x.flag&flagIndir != 0 { // 非间接指针
 		p = x.ptr
 	} else {
 		p = unsafe.Pointer(&x.ptr)
@@ -1970,15 +2107,22 @@ func (v Value) send(x Value, nb bool) (selected bool) {
 // Set assigns x to the value v.
 // It panics if CanSet returns false.
 // As in Go, x's value must be assignable to v's type.
+/**
+ * Set将x赋给值v。
+ * 如果CanSet返回false，则会引起恐慌。
+ * 和Go一样，x的值必须可分配给v的类型。
+ * @param
+ * @return
+ **/
 func (v Value) Set(x Value) {
-	v.mustBeAssignable()
-	x.mustBeExported() // do not let unexported x leak
+	v.mustBeAssignable() // 发须是可赋值的
+	x.mustBeExported() // do not let unexported x leak // 不要让未导出的x泄漏
 	var target unsafe.Pointer
-	if v.kind() == Interface {
+	if v.kind() == Interface { // 接口类型
 		target = v.ptr
 	}
 	x = x.assignTo("reflect.Set", v.typ, target)
-	if x.flag&flagIndir != 0 {
+	if x.flag&flagIndir != 0 { // 非间接指针
 		typedmemmove(v.typ, v.ptr, x.ptr)
 	} else {
 		*(*unsafe.Pointer)(v.ptr) = x.ptr
@@ -1987,6 +2131,12 @@ func (v Value) Set(x Value) {
 
 // SetBool sets v's underlying value.
 // It panics if v's Kind is not Bool or if CanSet() is false.
+/**
+ * SetBool设置v的底层值。
+ * 如果v的Kind不是Bool或CanSet()为false，则会发生恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) SetBool(x bool) {
 	v.mustBeAssignable()
 	v.mustBe(Bool)
@@ -1995,6 +2145,12 @@ func (v Value) SetBool(x bool) {
 
 // SetBytes sets v's underlying value.
 // It panics if v's underlying value is not a slice of bytes.
+/**
+ * SetBytes设置v的底层值。
+ * 如果v的底层值不是一个字节片，则会引起恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) SetBytes(x []byte) {
 	v.mustBeAssignable()
 	v.mustBe(Slice)
@@ -2006,6 +2162,12 @@ func (v Value) SetBytes(x []byte) {
 
 // setRunes sets v's underlying value.
 // It panics if v's underlying value is not a slice of runes (int32s).
+/**
+ * SetBytes设置v的底层值。
+ * 如果v的底层值不是符文（int32s）切片，则会引起恐慌
+ * @param
+ * @return
+ **/
 func (v Value) setRunes(x []rune) {
 	v.mustBeAssignable()
 	v.mustBe(Slice)
@@ -2017,6 +2179,12 @@ func (v Value) setRunes(x []rune) {
 
 // SetComplex sets v's underlying value to x.
 // It panics if v's Kind is not Complex64 or Complex128, or if CanSet() is false.
+/**
+ * SetBytes设置v的底层值。
+ * 如果v的Kind不是Complex64或Complex128，或者CanSet()为false，则会引起恐慌
+ * @param
+ * @return
+ **/
 func (v Value) SetComplex(x complex128) {
 	v.mustBeAssignable()
 	switch k := v.kind(); k {
@@ -2031,6 +2199,12 @@ func (v Value) SetComplex(x complex128) {
 
 // SetFloat sets v's underlying value to x.
 // It panics if v's Kind is not Float32 or Float64, or if CanSet() is false.
+/**
+ * SetBytes设置v的底层值。
+ * 如果v的Kind不是Float32或Float64，或者CanSet()为false，则会引起恐慌
+ * @param
+ * @return
+ **/
 func (v Value) SetFloat(x float64) {
 	v.mustBeAssignable()
 	switch k := v.kind(); k {
@@ -2045,6 +2219,12 @@ func (v Value) SetFloat(x float64) {
 
 // SetInt sets v's underlying value to x.
 // It panics if v's Kind is not Int, Int8, Int16, Int32, or Int64, or if CanSet() is false.
+/**
+ * SetBytes设置v的底层值。
+ * 如果v的Kind不是Int, Int8, Int16, Int32, 或者 Int64，或者CanSet()为false，则会引起恐慌
+ * @param
+ * @return
+ **/
 func (v Value) SetInt(x int64) {
 	v.mustBeAssignable()
 	switch k := v.kind(); k {
@@ -2066,6 +2246,12 @@ func (v Value) SetInt(x int64) {
 // SetLen sets v's length to n.
 // It panics if v's Kind is not Slice or if n is negative or
 // greater than the capacity of the slice.
+/**
+ * SetLen将v的长度设置为n。
+ * 如果v的Kind不是Slice，或者n为负或大于slice的容量，则会发生恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) SetLen(n int) {
 	v.mustBeAssignable()
 	v.mustBe(Slice)
@@ -2079,6 +2265,12 @@ func (v Value) SetLen(n int) {
 // SetCap sets v's capacity to n.
 // It panics if v's Kind is not Slice or if n is smaller than the length or
 // greater than the capacity of the slice.
+/**
+ * SetCap将v的容量设置为n。
+ * 如果v的Kind不是Slice，或者n小于length或大于slice的容量，则会发生恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) SetCap(n int) {
 	v.mustBeAssignable()
 	v.mustBe(Slice)
@@ -2095,35 +2287,50 @@ func (v Value) SetCap(n int) {
 // Otherwise if v holds a nil map, SetMapIndex will panic.
 // As in Go, key's elem must be assignable to the map's key type,
 // and elem's value must be assignable to the map's elem type.
+/**
+ * SetMapIndex将与map v中的key关联的元素设置为elem。
+ * 如果v的Kind不是Map，它会感到恐慌。
+ * 如果elem为零值，则SetMapIndex会从map中删除键。
+ * 否则，如果v持有nil map，则SetMapIndex会恐慌。
+ * 和Go一样，键的elem必须可分配给map的键类型，并且elem的值必须可分配给map的值类型。
+ * @param
+ * @return
+ **/
 func (v Value) SetMapIndex(key, elem Value) {
-	v.mustBe(Map)
-	v.mustBeExported()
-	key.mustBeExported()
+	v.mustBe(Map) // 必须是map类型
+	v.mustBeExported() // v必须是可导出类型
+	key.mustBeExported() // key必须是可导出类型
 	tt := (*mapType)(unsafe.Pointer(v.typ))
-	key = key.assignTo("reflect.Value.SetMapIndex", tt.key, nil)
-	var k unsafe.Pointer
-	if key.flag&flagIndir != 0 {
+	key = key.assignTo("reflect.Value.SetMapIndex", tt.key, nil) // key必须可赋值给map的key
+	var k unsafe.Pointer // 间接指针
+	if key.flag&flagIndir != 0 { // 是间接指针
 		k = key.ptr
 	} else {
 		k = unsafe.Pointer(&key.ptr)
 	}
-	if elem.typ == nil {
+	if elem.typ == nil { // elem是nil类型，就从原map中删除key并且返回
 		mapdelete(v.typ, v.pointer(), k)
 		return
 	}
-	elem.mustBeExported()
-	elem = elem.assignTo("reflect.Value.SetMapIndex", tt.elem, nil)
-	var e unsafe.Pointer
-	if elem.flag&flagIndir != 0 {
+	elem.mustBeExported() // elem必须是可导出类型
+	elem = elem.assignTo("reflect.Value.SetMapIndex", tt.elem, nil) // elem必须可赋值给map的value
+	var e unsafe.Pointer // 间接指针
+	if elem.flag&flagIndir != 0 { // 是间接指针
 		e = elem.ptr
 	} else {
 		e = unsafe.Pointer(&elem.ptr)
 	}
-	mapassign(v.typ, v.pointer(), k, e)
+	mapassign(v.typ, v.pointer(), k, e) // 设值
 }
 
 // SetUint sets v's underlying value to x.
 // It panics if v's Kind is not Uint, Uintptr, Uint8, Uint16, Uint32, or Uint64, or if CanSet() is false.
+/**
+ * SetUint将v的底层设置为x。
+ * 如果v的Kind不是Uint，Uintptr，Uint8，Uint16，Uint32或Uint64，或者CanSet()为false，则它会引起恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) SetUint(x uint64) {
 	v.mustBeAssignable()
 	switch k := v.kind(); k {
@@ -2146,6 +2353,12 @@ func (v Value) SetUint(x uint64) {
 
 // SetPointer sets the unsafe.Pointer value v to x.
 // It panics if v's Kind is not UnsafePointer.
+/**
+ * SetPointer将unsafe.Pointer值v设置为x。
+ * 如果v的Kind不是UnsafePointer，则会发生恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) SetPointer(x unsafe.Pointer) {
 	v.mustBeAssignable()
 	v.mustBe(UnsafePointer)
@@ -2154,6 +2367,12 @@ func (v Value) SetPointer(x unsafe.Pointer) {
 
 // SetString sets v's underlying value to x.
 // It panics if v's Kind is not String or if CanSet() is false.
+/**
+ * SetString将v的底层值设置为x。
+ * 如果v的Kind不是String或CanSet（）为false，则会发生恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) SetString(x string) {
 	v.mustBeAssignable()
 	v.mustBe(String)
@@ -2163,6 +2382,12 @@ func (v Value) SetString(x string) {
 // Slice returns v[i:j].
 // It panics if v's Kind is not Array, Slice or String, or if v is an unaddressable array,
 // or if the indexes are out of bounds.
+/**
+ * Slice返回v[i:j]。
+ * 如果v的Kind不是Array，Slice或String，或者v是不可寻址的数组，或者索引超出范围，则会发生恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) Slice(i, j int) Value {
 	var (
 		cap  int
@@ -2205,9 +2430,11 @@ func (v Value) Slice(i, j int) Value {
 	}
 
 	// Declare slice so that gc can see the base pointer in it.
+	// 声明slice，以便gc可以在其中看到基本指针。
 	var x []unsafe.Pointer
 
 	// Reinterpret as *sliceHeader to edit.
+	// 重新解释为* sliceHeader进行编辑。
 	s := (*sliceHeader)(unsafe.Pointer(&x))
 	s.Len = j - i
 	s.Cap = cap - i
@@ -2215,6 +2442,7 @@ func (v Value) Slice(i, j int) Value {
 		s.Data = arrayAt(base, i, typ.elem.Size(), "i < cap")
 	} else {
 		// do not advance pointer, to avoid pointing beyond end of slice
+		// 不要前进指针，以避免指向超出切片末端
 		s.Data = base
 	}
 
@@ -2225,6 +2453,14 @@ func (v Value) Slice(i, j int) Value {
 // Slice3 is the 3-index form of the slice operation: it returns v[i:j:k].
 // It panics if v's Kind is not Array or Slice, or if v is an unaddressable array,
 // or if the indexes are out of bounds.
+/**
+ * Slice3是切片操作的3索引形式：它返回v [i:j:k]。
+ * 如果v的Kind不是Array或Slice，或者v是不可寻址的数组，或者索引超出范围，则它会发生错误。
+ * @param
+ * @param
+ * @param k 表示容量
+ * @return
+ **/
 func (v Value) Slice3(i, j, k int) Value {
 	var (
 		cap  int
@@ -2257,9 +2493,11 @@ func (v Value) Slice3(i, j, k int) Value {
 
 	// Declare slice so that the garbage collector
 	// can see the base pointer in it.
+	// 声明切片，以便垃圾收集器可以在其中看到基本指针。
 	var x []unsafe.Pointer
 
 	// Reinterpret as *sliceHeader to edit.
+	// 重新解释为* sliceHeader进行编辑。
 	s := (*sliceHeader)(unsafe.Pointer(&x))
 	s.Len = j - i
 	s.Cap = k - i
@@ -2267,10 +2505,11 @@ func (v Value) Slice3(i, j, k int) Value {
 		s.Data = arrayAt(base, i, typ.elem.Size(), "i < k <= cap")
 	} else {
 		// do not advance pointer, to avoid pointing beyond end of slice
+		// 不要前进指针，以避免指向超出切片末端
 		s.Data = base
 	}
 
-	fl := v.flag.ro() | flagIndir | flag(Slice)
+	fl := v.flag.ro() | flagIndir | flag(Slice) // 设置标记
 	return Value{typ.common(), unsafe.Pointer(&x), fl}
 }
 
@@ -2569,9 +2808,9 @@ type SelectDir int
 
 const (
 	_             SelectDir = iota
-	SelectSend              // case Chan <- Send
-	SelectRecv              // case <-Chan:
-	SelectDefault           // default
+	SelectSend            *  case Chan <- Send
+	SelectRecv            *  case <-Chan:
+	SelectDefault         *  default
 )
 
 // A SelectCase describes a single case in a select operation.
@@ -2593,7 +2832,7 @@ const (
 //
 type SelectCase struct {
 	Dir  SelectDir // direction of case
-	Chan Value     // channel to use (for send or receive)
+	Chan Value   *  channel to use (for send or receive)
 	Send Value     // value to send (for send)
 }
 
