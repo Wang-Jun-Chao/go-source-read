@@ -2040,7 +2040,7 @@ func (v Value) Recv() (x Value, ok bool) {
 // v is known to be a channel.
 /**
  * 内部recv方法，可能是非阻塞（nb）。 v被称为通道。
- * @param
+ * @param true: 表示非阻塞
  * @return
  **/
 func (v Value) recv(nb bool) (val Value, ok bool) {
@@ -2086,6 +2086,7 @@ func (v Value) Send(x Value) {
 /**
  * 内部发送方法，可能是非阻塞的。v是一个通道。
  * @param
+ * @param nb true: 表示不阻塞
  * @return
  **/
 func (v Value) send(x Value, nb bool) (selected bool) {
@@ -2519,6 +2520,15 @@ func (v Value) Slice3(i, j, k int) Value {
 // Instead, it returns a string of the form "<T value>" where T is v's type.
 // The fmt package treats Values specially. It does not call their String
 // method implicitly but instead prints the concrete values they hold.
+/**
+ * String以字符串形式返回字符串v的底层值。
+ * 由于Go的String方法约定，String是一种特殊情况。
+ * 与其他获取方法不同的是，如果v的Kind不是String，它不会惊慌。
+ * 相反，它返回形式为“ <T value>”的字符串，其中T是v的类型。
+ * fmt包特别对待Values。 它不会隐式调用其String方法，而是打印它们持有的具体值。
+ * @param
+ * @return
+ **/
 func (v Value) String() string {
 	switch k := v.kind(); k {
 	case Invalid:
@@ -2528,6 +2538,7 @@ func (v Value) String() string {
 	}
 	// If you call String on a reflect.Value of other type, it's better to
 	// print something than to panic. Useful in debugging.
+	// 如果在其他类型的reflect.Value上调用String，则打印某些内容要比恐慌好。 在调试中很有用。
 	return "<" + v.Type().String() + " Value>"
 }
 
@@ -2536,6 +2547,15 @@ func (v Value) String() string {
 // If the receive delivers a value, x is the transferred value and ok is true.
 // If the receive cannot finish without blocking, x is the zero Value and ok is false.
 // If the channel is closed, x is the zero value for the channel's element type and ok is false.
+/**
+ * TryRecv尝试从通道v接收值，但不会阻塞。
+ * 如果v's Kind不是Chan，就会引起恐慌。
+ * 如果接收方提供了一个值，则x是已传输的值，而ok是true。
+ * 如果接收无法完成而没有阻塞，则x为零值，ok为false。
+ * 如果关闭了通道，则x为通道元素类型的零值，ok为false。
+ * @param
+ * @return
+ **/
 func (v Value) TryRecv() (x Value, ok bool) {
 	v.mustBe(Chan)
 	v.mustBeExported()
@@ -2546,6 +2566,14 @@ func (v Value) TryRecv() (x Value, ok bool) {
 // It panics if v's Kind is not Chan.
 // It reports whether the value was sent.
 // As in Go, x's value must be assignable to the channel's element type.
+/**
+ * TrySend尝试在通道v上发送x，但不会阻塞。
+ * 如果v's Kind不是Chan，就会感到恐慌。
+ * 返回值报告是否发送了值。
+ * 和Go一样，x的值必须可分配给通道的元素类型。
+ * @param
+ * @return
+ **/
 func (v Value) TrySend(x Value) bool {
 	v.mustBe(Chan)
 	v.mustBeExported()
@@ -2553,29 +2581,36 @@ func (v Value) TrySend(x Value) bool {
 }
 
 // Type returns v's type.
+/**
+ * Type返回v的类型。
+ * @param
+ * @return
+ **/
 func (v Value) Type() Type {
 	f := v.flag
-	if f == 0 {
+	if f == 0 { // 非法类型
 		panic(&ValueError{"reflect.Value.Type", Invalid})
 	}
-	if f&flagMethod == 0 {
+	if f&flagMethod == 0 { // 非方法类型
 		// Easy case
 		return v.typ
 	}
 
 	// Method value.
 	// v.typ describes the receiver, not the method type.
+	// 方法值。v.typ描述接收者，而不是方法类型。
 	i := int(v.flag) >> flagMethodShift
-	if v.typ.Kind() == Interface {
+	if v.typ.Kind() == Interface { // 接收者是接口
 		// Method on interface.
 		tt := (*interfaceType)(unsafe.Pointer(v.typ))
-		if uint(i) >= uint(len(tt.methods)) {
+		if uint(i) >= uint(len(tt.methods)) { // 索引超出方法数
 			panic("reflect: internal error: invalid method index")
 		}
 		m := &tt.methods[i]
 		return v.typ.typeOff(m.typ)
 	}
 	// Method on concrete type.
+	// 具体类型的方法。
 	ms := v.typ.exportedMethods()
 	if uint(i) >= uint(len(ms)) {
 		panic("reflect: internal error: invalid method index")
@@ -2586,6 +2621,12 @@ func (v Value) Type() Type {
 
 // Uint returns v's underlying value, as a uint64.
 // It panics if v's Kind is not Uint, Uintptr, Uint8, Uint16, Uint32, or Uint64.
+/**
+ * Uint以uint64返回v的底层值。
+ * 如果v的Kind不是Uint，Uintptr，Uint8，Uint16，Uint32或Uint64，则会出现恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) Uint() uint64 {
 	k := v.kind()
 	p := v.ptr
@@ -2614,6 +2655,17 @@ func (v Value) Uint() uint64 {
 // UnsafeAddr returns a pointer to v's data.
 // It is for advanced clients that also import the "unsafe" package.
 // It panics if v is not addressable.
+/**
+ * go:nocheckptr
+ * 这样可以防止在启用-d=checkptr时内联Value.UnsafeAddr，
+ * 以确保cmd/compile可以识别unsafe.Pointer(v.UnsafeAddr())并生成异常。
+
+ * UnsafeAddr返回指向v的数据的指针。
+ * 适用于高级客户，这些客户也导入了“不安全”包。
+ * 如果v不可寻址，则会出现恐慌情况。
+ * @param
+ * @return
+ **/
 func (v Value) UnsafeAddr() uintptr {
 	// TODO: deprecate
 	if v.typ == nil {
@@ -2631,12 +2683,26 @@ func (v Value) UnsafeAddr() uintptr {
 // Moreover, the Data field is not sufficient to guarantee the data
 // it references will not be garbage collected, so programs must keep
 // a separate, correctly typed pointer to the underlying data.
+/**
+ * StringHeader是字符串的运行时表示形式。
+ * 无法安全或便携地使用它，并且其表示形式可能在以后的版本中更改。
+ * 此外，“Data”字段还不足以保证不会对其进行垃圾回收，因此程序必须保留一个单独的，
+ * 正确类型的指向基础数据的指针。
+ * 注意：这是一个非稳定性结构，后续的版本可能会改变
+ * @param
+ * @return
+ **/
 type StringHeader struct {
 	Data uintptr
 	Len  int
 }
 
 // stringHeader is a safe version of StringHeader used within this package.
+/**
+ * stringHeader是此程序包中使用的StringHeader的安全版本。
+ * @param
+ * @return
+ **/
 type stringHeader struct {
 	Data unsafe.Pointer
 	Len  int
@@ -2648,6 +2714,15 @@ type stringHeader struct {
 // Moreover, the Data field is not sufficient to guarantee the data
 // it references will not be garbage collected, so programs must keep
 // a separate, correctly typed pointer to the underlying data.
+/**
+ * SliceHeader是切片的运行时表示形式。
+ * 无法安全或便携地使用它，并且其表示形式可能在以后的版本中更改。
+ * 此外，“Data”字段还不足以保证不会对其进行垃圾回收，因此程序必须保留一个单独的，
+ * 正确类型的指向基础数据的指针。
+ * 注意：这是一个非稳定性结构，后续的版本可能会改变
+ * @param
+ * @return
+ **/
 type SliceHeader struct {
 	Data uintptr
 	Len  int
@@ -2655,12 +2730,22 @@ type SliceHeader struct {
 }
 
 // sliceHeader is a safe version of SliceHeader used within this package.
+/**
+ * sliceHeader是此包中使用的SliceHeader的安全版本。
+ * @param
+ * @return
+ **/
 type sliceHeader struct {
 	Data unsafe.Pointer
 	Len  int
 	Cap  int
 }
 
+/**
+ * 两种类型必须切尔西
+ * @param
+ * @return
+ **/
 func typesMustMatch(what string, t1, t2 Type) {
 	if t1 != t2 {
 		panic(what + ": " + t1.String() + " != " + t2.String())
@@ -2674,16 +2759,28 @@ func typesMustMatch(what string, t1, t2 Type) {
 // because then the result will point outside the array.
 // whySafe must explain why i < len. (Passing "i < len" is fine;
 // the benefit is to surface this assumption at the call site.)
+/**
+ * arrayAt返回p的第i个元素，其中p是eltSize字节宽的数组。
+ * p指向的数组必须至少包含i+1个元素：传递i>=len无效（但此处无法检查），因为这样结果将指向数组之外。
+ * whySafe必须解释为什么i<len。 （传递“i<len”是可以的；这样做的好处是可以在调用点显示此假设。）
+ * @param
+ * @return
+ **/
 func arrayAt(p unsafe.Pointer, i int, eltSize uintptr, whySafe string) unsafe.Pointer {
 	return add(p, uintptr(i)*eltSize, "i < len")
 }
 
 // grow grows the slice s so that it can hold extra more values, allocating
 // more capacity if needed. It also returns the old and new slice lengths.
+/**
+ * 增长切片s，使其可以容纳更多的值，并在需要时分配更多的容量。它还返回旧的和新的切片长度。
+ * @param
+ * @return
+ **/
 func grow(s Value, extra int) (Value, int, int) {
 	i0 := s.Len()
 	i1 := i0 + extra
-	if i1 < i0 {
+	if i1 < i0 { // 溢出
 		panic("reflect.Append: slice overflow")
 	}
 	m := s.Cap()
@@ -2694,7 +2791,7 @@ func grow(s Value, extra int) (Value, int, int) {
 		m = extra
 	} else {
 		for m < i1 {
-			if i0 < 1024 {
+			if i0 < 1024 { // 小于1024每次加倍，大于1024每次增长1/4
 				m += m
 			} else {
 				m += m / 4
@@ -2708,6 +2805,11 @@ func grow(s Value, extra int) (Value, int, int) {
 
 // Append appends the values x to a slice s and returns the resulting slice.
 // As in Go, each x's value must be assignable to the slice's element type.
+/**
+ * Append将值x附加到切片s上，并返回结果切片。与Go中一样，每个x的值必须可分配给slice的元素类型。
+ * @param
+ * @return
+ **/
 func Append(s Value, x ...Value) Value {
 	s.mustBe(Slice)
 	s, i0, i1 := grow(s, len(x))
@@ -2719,6 +2821,11 @@ func Append(s Value, x ...Value) Value {
 
 // AppendSlice appends a slice t to a slice s and returns the resulting slice.
 // The slices s and t must have the same element type.
+/**
+ * AppendSlice将切片t附加到切片s上，并返回结果切片。 切片s和t必须具有相同的元素类型。
+ * @param
+ * @return
+ **/
 func AppendSlice(s, t Value) Value {
 	s.mustBe(Slice)
 	t.mustBe(Slice)
@@ -2735,6 +2842,15 @@ func AppendSlice(s, t Value) Value {
 // dst and src must have the same element type.
 //
 // As a special case, src can have kind String if the element type of dst is kind Uint8.
+/**
+ * 复制将src的内容复制到dst中，直到填满dst或用尽src。
+ * 返回复制的元素数。
+ * dst和src都必须具有切片或数组类型，并且dst和src必须具有相同的元素类型。
+ *
+ * 作为一种特殊情况，如果dst的元素类型为Uint8，则src可以具有String类型。
+ * @param
+ * @return
+ **/
 func Copy(dst, src Value) int {
 	dk := dst.kind()
 	if dk != Array && dk != Slice {
@@ -2787,11 +2903,17 @@ func Copy(dst, src Value) int {
 
 // A runtimeSelect is a single case passed to rselect.
 // This must match ../runtime/select.go:/runtimeSelect
+/**
+ * runtimeSelect是传递给rselect的单个案例。
+ * 这必须匹配../runtime/select.go:/runtimeSelect
+ * @param
+ * @return
+ **/
 type runtimeSelect struct {
-	dir SelectDir    *  SelectSend, SelectRecv or SelectDefault
-	typ *rtype       *  channel type
-	ch  unsafe.Pointer // channel
-	val unsafe.Pointer // ptr to data (SendDir) or ptr to receive buffer (RecvDir)
+	dir SelectDir    //  SelectSend, SelectRecv or SelectDefault  // 通道方向
+	typ *rtype       //  channel type   // 通道数据类型
+	ch  unsafe.Pointer // channel // 通道指针
+	val unsafe.Pointer // ptr to data (SendDir) or ptr to receive buffer (RecvDir) // 数据指针
 }
 
 // rselect runs a select. It returns the index of the chosen case.
@@ -2799,18 +2921,28 @@ type runtimeSelect struct {
 // The conventional OK bool indicates whether the receive corresponds
 // to a sent value.
 //go:noescape
+/**
+ * rselect运行select。 它返回所选case的索引。
+ * 如果case是接收的，则用接收的值填充val。
+ * 常规的OK bool指示接收是否与发送的值相对应。
+ *go:noescape
+ */
 func rselect([]runtimeSelect) (chosen int, recvOK bool)
 
 // A SelectDir describes the communication direction of a select case.
+/**
+ * SelectDir描述select case的通信方向。
+ */
 type SelectDir int
 
 // NOTE: These values must match ../runtime/select.go:/selectDir.
+// 注意：这些值必须匹配../runtime/select.go:/selectDir。
 
 const (
 	_             SelectDir = iota
-	SelectSend            *  case Chan <- Send
-	SelectRecv            *  case <-Chan:
-	SelectDefault         *  default
+	SelectSend            //  case Chan <- Send // 发送case
+	SelectRecv            //  case <-Chan:      // 接收case
+	SelectDefault         //  default           // 默认case
 )
 
 // A SelectCase describes a single case in a select operation.
@@ -2830,10 +2962,25 @@ const (
 // If Chan is a zero Value, then the case is ignored, but Send must still be a zero Value.
 // When a receive operation is selected, the received Value is returned by Select.
 //
+/**
+ * SelectCase描述了select操作中的单个case情况。case的种类取决于Dir，通讯方向。
+ *
+ * 如果Dir为SelectDefault，则case表示default case。Chan和Send必须为零值。
+ *
+ * 如果Dir是SelectSend，则case表示发送操作。
+ * 通常，Chan的底层值必须是一个通道，Send的底层值必须可分配给该渠道的元素类型。
+ * 作为一种特殊情况，如果Chan为零值，则忽略大小写，并且字段Send也将被忽略，并且可以为零或非零。
+ *
+ * 如果Dir是SelectRecv，则case表示接收操作。
+ * 通常，Chan的底层值必须是一个通道，Send必须是零值。
+ * 如果Chan是零值，则忽略大小写，但是Send必须仍然是零值。
+ * 选择接收操作时，Select将返回接收到的值。
+ *
+ */
 type SelectCase struct {
-	Dir  SelectDir // direction of case
-	Chan Value   *  channel to use (for send or receive)
-	Send Value     // value to send (for send)
+	Dir  SelectDir // direction of case // case方向
+	Chan Value   //  channel to use (for send or receive) // 使用的通道（用于发送或接收）
+	Send Value     // value to send (for send) // 要发送的值（用于发送）
 }
 
 // Select executes a select operation described by the list of cases.
@@ -2843,24 +2990,32 @@ type SelectCase struct {
 // and, if that case was a receive operation, the value received and a
 // boolean indicating whether the value corresponds to a send on the channel
 // (as opposed to a zero value received because the channel is closed).
+/**
+ * Select执行case列表所描述的选择操作。
+ * 像Go select语句一样，它阻塞直到至少一种case可以继续进行，做出统一的伪随机选择，然后执行该情况。
+ * 它返回所选case的索引，如果该case是接收操作，则返回接收到的值和一个布尔值，指示该值是否对应于通道上的发送
+ * （而不是因为通道关闭而接收到的零值）。
+ */
 func Select(cases []SelectCase) (chosen int, recv Value, recvOK bool) {
 	// NOTE: Do not trust that caller is not modifying cases data underfoot.
 	// The range is safe because the caller cannot modify our copy of the len
 	// and each iteration makes its own copy of the value c.
+	// 注意：不要相信调用者没有修改下面的case数据。
+    // 范围是安全的，因为调用者无法修改我们的len副本，并且每次迭代都将自己复制值c。
 	runcases := make([]runtimeSelect, len(cases))
-	haveDefault := false
-	for i, c := range cases {
+	haveDefault := false // 是否有默认case
+	for i, c := range cases { // 遍历所有的case
 		rc := &runcases[i]
 		rc.dir = c.Dir
-		switch c.Dir {
+		switch c.Dir { // 通道方向
 		default:
 			panic("reflect.Select: invalid Dir")
 
-		case SelectDefault: // default
+		case SelectDefault: // default // 默认情况
 			if haveDefault {
 				panic("reflect.Select: multiple default cases")
 			}
-			haveDefault = true
+			haveDefault = true // 标记有select default
 			if c.Chan.IsValid() {
 				panic("reflect.Select: default case has Chan value")
 			}
@@ -2868,43 +3023,43 @@ func Select(cases []SelectCase) (chosen int, recv Value, recvOK bool) {
 				panic("reflect.Select: default case has Send value")
 			}
 
-		case SelectSend:
+		case SelectSend: // 发送通道
 			ch := c.Chan
-			if !ch.IsValid() {
+			if !ch.IsValid() { // 通道无效
 				break
 			}
 			ch.mustBe(Chan)
 			ch.mustBeExported()
 			tt := (*chanType)(unsafe.Pointer(ch.typ))
-			if ChanDir(tt.dir)&SendDir == 0 {
+			if ChanDir(tt.dir)&SendDir == 0 { // 不是发送通道
 				panic("reflect.Select: SendDir case using recv-only channel")
 			}
 			rc.ch = ch.pointer()
 			rc.typ = &tt.rtype
 			v := c.Send
-			if !v.IsValid() {
+			if !v.IsValid() { // 值无效
 				panic("reflect.Select: SendDir case missing Send value")
 			}
 			v.mustBeExported()
 			v = v.assignTo("reflect.Select", tt.elem, nil)
-			if v.flag&flagIndir != 0 {
+			if v.flag&flagIndir != 0 { // 间接指针
 				rc.val = v.ptr
 			} else {
-				rc.val = unsafe.Pointer(&v.ptr)
+				rc.val = unsafe.Pointer(&v.ptr) // 非间接指针，就构造间接指针
 			}
 
-		case SelectRecv:
-			if c.Send.IsValid() {
+		case SelectRecv: // 接收通道
+			if c.Send.IsValid() { // 发送值有效
 				panic("reflect.Select: RecvDir case has Send value")
 			}
 			ch := c.Chan
-			if !ch.IsValid() {
+			if !ch.IsValid() { // 通道无效
 				break
 			}
 			ch.mustBe(Chan)
 			ch.mustBeExported()
 			tt := (*chanType)(unsafe.Pointer(ch.typ))
-			if ChanDir(tt.dir)&RecvDir == 0 {
+			if ChanDir(tt.dir)&RecvDir == 0 { // 非接收通道
 				panic("reflect.Select: RecvDir case using send-only channel")
 			}
 			rc.ch = ch.pointer()
@@ -2914,7 +3069,7 @@ func Select(cases []SelectCase) (chosen int, recv Value, recvOK bool) {
 	}
 
 	chosen, recvOK = rselect(runcases)
-	if runcases[chosen].dir == SelectRecv {
+	if runcases[chosen].dir == SelectRecv { // 如果是接收通道，需要处理接收值
 		tt := (*chanType)(unsafe.Pointer(runcases[chosen].typ))
 		t := tt.elem
 		p := runcases[chosen].val
