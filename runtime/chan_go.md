@@ -1,5 +1,5 @@
 
-```
+```go
 package runtime
 
 // This file contains the implementation of Go channels.
@@ -14,7 +14,17 @@ package runtime
 // For buffered channels, also:
 //  c.qcount > 0 implies that c.recvq is empty.
 //  c.qcount < c.dataqsiz implies that c.sendq is empty.
+/**
+ * 此文件包含Go渠道的实现。
+ *
+ * 不变量：
+ * c.sendq和c.recvq中的至少一个为空，但在无缓冲通道上阻塞了单个goroutine以便使用select语句发送和接收的情况除外，在这种情况下，
+ * c.sendq的长度 而c.recvq仅受select语句的大小限制。
 
+ * 对于缓冲通道，还：
+ * c.qcount> 0表示c.recvq为空。
+ * c.qcount <c.dataqsiz表示c.sendq为空。
+ */
 import (
 	"runtime/internal/atomic"
 	"runtime/internal/math"
@@ -22,22 +32,22 @@ import (
 )
 
 const (
-	maxAlign  = 8
+	maxAlign  = 8 // 单字节对齐
 	hchanSize = unsafe.Sizeof(hchan{}) + uintptr(-int(unsafe.Sizeof(hchan{}))&(maxAlign-1))
 	debugChan = false
 )
 
 type hchan struct {
-	qcount   uint           // total data in the queue
-	dataqsiz uint           // size of the circular queue
-	buf      unsafe.Pointer // points to an array of dataqsiz elements
+	qcount   uint           // total data in the queue // 队列中的数据总数
+	dataqsiz uint           // size of the circular queue   // 循环队列的大小
+	buf      unsafe.Pointer // points to an array of dataqsiz elements // 指向dataqsiz数组中的一个元素
 	elemsize uint16
 	closed   uint32
-	elemtype *_type // element type
-	sendx    uint   // send index
-	recvx    uint   // receive index
-	recvq    waitq  // list of recv waiters
-	sendq    waitq  // list of send waiters
+	elemtype *_type // element type // 元素类型
+	sendx    uint   // send index   // 发送索引
+	recvx    uint   // receive index // 接收索引
+	recvq    waitq  // list of recv waiters // 所有等待的接收者
+	sendq    waitq  // list of send waiters // 所有等待的发送者
 
 	// lock protects all fields in hchan, as well as several
 	// fields in sudogs blocked on this channel.
@@ -45,17 +55,27 @@ type hchan struct {
 	// Do not change another G's status while holding this lock
 	// (in particular, do not ready a G), as this can deadlock
 	// with stack shrinking.
+	// 锁保护hchan中的所有字段，以及此通道上阻止的sudogs中的多个字段。
+    // 保持该锁状态时，请勿更改另一个G的状态（特别是不要准备好G），因为这会因堆栈收缩而死锁。
 	lock mutex
 }
 
+/**
+ * 等待队列数据结棍
+ */
 type waitq struct {
-	first *sudog
-	last  *sudog
+	first *sudog    // 队列头
+	last  *sudog    // 队列尾
 }
 
 //go:linkname reflect_makechan reflect.makechan
+/**
+ * 通过反射创建通道，
+ * @param
+ * @return
+ **/
 func reflect_makechan(t *chantype, size int) *hchan {
-	return makechan(t, size)
+	return makechan(t, size) // 在reflect/value.go/makechan方法中实现
 }
 
 func makechan64(t *chantype, size int64) *hchan {
