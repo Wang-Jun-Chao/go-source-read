@@ -3088,11 +3088,19 @@ func Select(cases []SelectCase) (chosen int, recv Value, recvOK bool) {
  */
 
 // implemented in package runtime
+/**
+ * 在runtime包时中实现
+ */
 func unsafe_New(*rtype) unsafe.Pointer
 func unsafe_NewArray(*rtype, int) unsafe.Pointer
 
 // MakeSlice creates a new zero-initialized slice value
 // for the specified slice type, length, and capacity.
+/**
+ * MakeSlice为指定的切片类型，长度和容量创建一个新的零初始化切片值。
+ * @param
+ * @return
+ **/
 func MakeSlice(typ Type, len, cap int) Value {
 	if typ.Kind() != Slice {
 		panic("reflect.MakeSlice of non-slice type")
@@ -3112,6 +3120,11 @@ func MakeSlice(typ Type, len, cap int) Value {
 }
 
 // MakeChan creates a new channel with the specified type and buffer size.
+/**
+ * MakeChan用指定的类型和缓冲区大小创建一个新通道。
+ * @param
+ * @return
+ **/
 func MakeChan(typ Type, buffer int) Value {
 	if typ.Kind() != Chan {
 		panic("reflect.MakeChan of non-chan type")
@@ -3128,12 +3141,22 @@ func MakeChan(typ Type, buffer int) Value {
 }
 
 // MakeMap creates a new map with the specified type.
+/**
+ * MakeMap创建具有指定类型的新map。
+ * @param
+ * @return
+ **/
 func MakeMap(typ Type) Value {
 	return MakeMapWithSize(typ, 0)
 }
 
 // MakeMapWithSize creates a new map with the specified type
 // and initial space for approximately n elements.
+/**
+ * MakeMapWithSize会为大约n个元素创建一个具有指定类型和初始空间的新Map。
+ * @param
+ * @return
+ **/
 func MakeMapWithSize(typ Type, n int) Value {
 	if typ.Kind() != Map {
 		panic("reflect.MakeMapWithSize of non-map type")
@@ -3146,6 +3169,13 @@ func MakeMapWithSize(typ Type, n int) Value {
 // Indirect returns the value that v points to.
 // If v is a nil pointer, Indirect returns a zero Value.
 // If v is not a pointer, Indirect returns v.
+/**
+ * Indirect返回v指向的值。
+ * 如果v是nil指针，则Indirect返回零值。
+ * 如果v不是指针，则Indirect返回v。
+ * @param
+ * @return
+ **/
 func Indirect(v Value) Value {
 	if v.Kind() != Ptr {
 		return v
@@ -3155,6 +3185,11 @@ func Indirect(v Value) Value {
 
 // ValueOf returns a new Value initialized to the concrete value
 // stored in the interface i. ValueOf(nil) returns the zero Value.
+/**
+ * ValueOf返回一个新的Value，初始化为存储在接口i中的具体值。 ValueOf（nil）返回零值。
+ * @param
+ * @return
+ **/
 func ValueOf(i interface{}) Value {
 	if i == nil {
 		return Value{}
@@ -3164,6 +3199,8 @@ func ValueOf(i interface{}) Value {
 	// For now we make the contents always escape to the heap. It
 	// makes life easier in a few places (see chanrecv/mapassign
 	// comment below).
+	// 待办事项：也许允许Value的内容保留在堆栈中。
+    // 现在，我们使内容始终转储到堆中。 它使某些地方的使用更方便（生活更加轻松）（请参阅下面的chanrecv/mapassign评论）。
 	escapes(i)
 
 	return unpackEface(i)
@@ -3174,13 +3211,21 @@ func ValueOf(i interface{}) Value {
 // which represents no value at all.
 // For example, Zero(TypeOf(42)) returns a Value with Kind Int and value 0.
 // The returned value is neither addressable nor settable.
+/**
+ * Zero返回一个值，该值表示指定类型的零值。
+ * 结果不同于Value结构的零值，该值根本不代表任何值。
+ * 例如，Zero（TypeOf（42））返回具有Kind Int和值0的值。
+ * 返回的值既不可寻址也不可设置。
+ * @param
+ * @return
+ **/
 func Zero(typ Type) Value {
 	if typ == nil {
 		panic("reflect: Zero(nil)")
 	}
 	t := typ.(*rtype)
 	fl := flag(t.Kind())
-	if ifaceIndir(t) {
+	if ifaceIndir(t) { // 间接指针
 		return Value{t, unsafe_New(t), fl | flagIndir}
 	}
 	return Value{t, nil, fl}
@@ -3188,18 +3233,28 @@ func Zero(typ Type) Value {
 
 // New returns a Value representing a pointer to a new zero value
 // for the specified type. That is, the returned Value's Type is PtrTo(typ).
+/**
+ * 新建返回一个值，该值表示指向指定类型的新零值的指针。 也就是说，返回的值的类型为PtrTo（typ）。
+ * @param
+ * @return
+ **/
 func New(typ Type) Value {
 	if typ == nil {
 		panic("reflect: New(nil)")
 	}
 	t := typ.(*rtype)
 	ptr := unsafe_New(t)
-	fl := flag(Ptr)
+	fl := flag(Ptr) // 指针类型
 	return Value{t.ptrTo(), ptr, fl}
 }
 
 // NewAt returns a Value representing a pointer to a value of the
 // specified type, using p as that pointer.
+/**
+ * NewAt返回一个值，该值表示指向指定类型值的指针，并使用p作为该指针。
+ * @param
+ * @return
+ **/
 func NewAt(typ Type, p unsafe.Pointer) Value {
 	fl := flag(Ptr)
 	t := typ.(*rtype)
@@ -3209,36 +3264,46 @@ func NewAt(typ Type, p unsafe.Pointer) Value {
 // assignTo returns a value v that can be assigned directly to typ.
 // It panics if v is not assignable to typ.
 // For a conversion to an interface type, target is a suggested scratch space to use.
+/**
+ * AssignTo返回可以直接分配给typ的值v。
+ * 如果无法将v分配给typ，则会出现恐慌情况。
+ * 要转换为接口类型，target是建议使用的暂存空间。
+ * @param
+ * @return
+ **/
 func (v Value) assignTo(context string, dst *rtype, target unsafe.Pointer) Value {
-	if v.flag&flagMethod != 0 {
+	if v.flag&flagMethod != 0 { // v是一个方法类型
 		v = makeMethodValue(context, v)
 	}
 
 	switch {
-	case directlyAssignable(dst, v.typ):
+	case directlyAssignable(dst, v.typ): // 可以直接赋值
 		// Overwrite type so that they match.
 		// Same memory layout, so no harm done.
-		fl := v.flag&(flagAddr|flagIndir) | v.flag.ro()
+		// 覆盖类型，使它们匹配。 相同的内存布局，因此无害。
+		fl := v.flag&(flagAddr|flagIndir) | v.flag.ro() // 设置标记
 		fl |= flag(dst.Kind())
 		return Value{dst, v.ptr, fl}
 
-	case implements(dst, v.typ):
+	case implements(dst, v.typ): // 类型实现
 		if target == nil {
 			target = unsafe_New(dst)
 		}
-		if v.Kind() == Interface && v.IsNil() {
+		if v.Kind() == Interface && v.IsNil() { // v是接口类型，并且v值是nil
 			// A nil ReadWriter passed to nil Reader is OK,
 			// but using ifaceE2I below will panic.
 			// Avoid the panic by returning a nil dst (e.g., Reader) explicitly.
+			// 传递给nil Reader的nil ReadWriter是可以的，但是在下面使用ifaceE2I会引起恐慌。
+            // 通过显式返回nil dst（例如Reader）来避免恐慌。
 			return Value{dst, nil, flag(Interface)}
 		}
 		x := valueInterface(v, false)
-		if dst.NumMethod() == 0 {
+		if dst.NumMethod() == 0 { // dst没有方法
 			*(*interface{})(target) = x
 		} else {
 			ifaceE2I(dst, x, target)
 		}
-		return Value{dst, target, flagIndir | flag(Interface)}
+		return Value{dst, target, flagIndir | flag(Interface)} // 打上间接打针和接口标记
 	}
 
 	// Failed.
@@ -3248,12 +3313,18 @@ func (v Value) assignTo(context string, dst *rtype, target unsafe.Pointer) Value
 // Convert returns the value v converted to type t.
 // If the usual Go conversion rules do not allow conversion
 // of the value v to type t, Convert panics.
+/**
+ * Convert返回将值v转换为类型t。
+ * 如果通常的Go转换规则不允许将值v转换为类型t，请转换恐慌。
+ * @param
+ * @return
+ **/
 func (v Value) Convert(t Type) Value {
-	if v.flag&flagMethod != 0 {
+	if v.flag&flagMethod != 0 { // v是方法类型
 		v = makeMethodValue("Convert", v)
 	}
-	op := convertOp(t.common(), v.typ)
-	if op == nil {
+	op := convertOp(t.common(), v.typ) // 类型转换
+	if op == nil { // 结果为nil，说明转换非法
 		panic("reflect.Value.Convert: value of type " + v.typ.String() + " cannot be converted to type " + t.String())
 	}
 	return op(v, t)
@@ -3261,6 +3332,12 @@ func (v Value) Convert(t Type) Value {
 
 // convertOp returns the function to convert a value of type src
 // to a value of type dst. If the conversion is illegal, convertOp returns nil.
+/**
+ * convertOp返回将src类型的值转换为dst类型的值的函数。 如果转换是非法的，则convertOp返回nil。
+ * @param dst 目标类型
+ * @param src 源类型
+ * @return Value nil表示转换非法，非op返回的值是一个转换方法
+ **/
 func convertOp(dst, src *rtype) func(Value, Type) Value {
 	switch src.Kind() {
 	case Int, Int8, Int16, Int32, Int64:
@@ -3326,19 +3403,21 @@ func convertOp(dst, src *rtype) func(Value, Type) Value {
 	}
 
 	// dst and src have same underlying type.
+	// dst和src具有相同的底层类型。
 	if haveIdenticalUnderlyingType(dst, src, false) {
 		return cvtDirect
 	}
 
 	// dst and src are non-defined pointer types with same underlying base type.
+	// dst和src是具有相同基本类型的未定义指针类型。
 	if dst.Kind() == Ptr && dst.Name() == "" &&
 		src.Kind() == Ptr && src.Name() == "" &&
 		haveIdenticalUnderlyingType(dst.Elem().common(), src.Elem().common(), false) {
 		return cvtDirect
 	}
 
-	if implements(dst, src) {
-		if src.Kind() == Interface {
+	if implements(dst, src) { // dst实现了src
+		if src.Kind() == Interface { // src是接口
 			return cvtI2I
 		}
 		return cvtT2I
@@ -3349,6 +3428,11 @@ func convertOp(dst, src *rtype) func(Value, Type) Value {
 
 // makeInt returns a Value of type t equal to bits (possibly truncated),
 // where t is a signed or unsigned int type.
+/**
+ * makeInt返回类型t的值，该值等于bits（可能被截断），其中t是有符号或无符号int类型。
+ * @param
+ * @return
+ **/
 func makeInt(f flag, bits uint64, t Type) Value {
 	typ := t.common()
 	ptr := unsafe_New(typ)
@@ -3367,6 +3451,11 @@ func makeInt(f flag, bits uint64, t Type) Value {
 
 // makeFloat returns a Value of type t equal to v (possibly truncated to float32),
 // where t is a float32 or float64 type.
+/**
+ * makeFloat返回的t类型的值等于v（可能被截断为float32），其中t是float32或float64类型。
+ * @param
+ * @return
+ **/
 func makeFloat(f flag, v float64, t Type) Value {
 	typ := t.common()
 	ptr := unsafe_New(typ)
@@ -3381,6 +3470,11 @@ func makeFloat(f flag, v float64, t Type) Value {
 
 // makeComplex returns a Value of type t equal to v (possibly truncated to complex64),
 // where t is a complex64 or complex128 type.
+/**
+ * makeComplex返回类型为t的值等于v（可能被截断为complex64），其中t是complex64或complex128类型。
+ * @param
+ * @return
+ **/
 func makeComplex(f flag, v complex128, t Type) Value {
 	typ := t.common()
 	ptr := unsafe_New(typ)
@@ -3418,6 +3512,13 @@ func makeRunes(f flag, v []rune, t Type) Value {
 // for classes of conversions. For example, the first function, cvtInt,
 // takes any value v of signed int type and returns the value converted
 // to type t, where t is any signed or unsigned int type.
+/**
+ * 这些转换函数由convertOp返回，用于转换类型。
+ * 例如，第一个函数cvtInt接受带符号int类型的任何值v并返回转换为类型t的值，
+ * 其中t是任何带符号或无符号int类型。
+ * @param
+ * @return
+ **/
 
 // convertOp: intXX -> [u]intXX
 func cvtInt(v Value, t Type) Value {
@@ -3490,12 +3591,18 @@ func cvtStringRunes(v Value, t Type) Value {
 }
 
 // convertOp: direct copy
+/**
+ * 直接拷贝
+ * @param
+ * @return
+ **/
 func cvtDirect(v Value, typ Type) Value {
 	f := v.flag
 	t := typ.common()
 	ptr := v.ptr
-	if f&flagAddr != 0 {
+	if f&flagAddr != 0 { // 间接类型
 		// indirect, mutable word - make a copy
+		// 间接，可变成——进行复制
 		c := unsafe_New(t)
 		typedmemmove(t, c, ptr)
 		ptr = c
@@ -3505,6 +3612,12 @@ func cvtDirect(v Value, typ Type) Value {
 }
 
 // convertOp: concrete -> interface
+/**
+ * 具体类型转换成接口类型
+ * Question: 使用场景是什么
+ * @param
+ * @return
+ **/
 func cvtT2I(v Value, typ Type) Value {
 	target := unsafe_New(typ.common())
 	x := valueInterface(v, false)
@@ -3527,6 +3640,8 @@ func cvtI2I(v Value, typ Type) Value {
 }
 
 // implemented in ../runtime
+// 在runtime包中实现
+// 三个方法分别表示通道的容量，关闭通道，通道的长度
 func chancap(ch unsafe.Pointer) int
 func chanclose(ch unsafe.Pointer)
 func chanlen(ch unsafe.Pointer) int
@@ -3538,40 +3653,107 @@ func chanlen(ch unsafe.Pointer) int
 // It is safe in this package because the referent may only point
 // to something a Value may point to, and that is always in the heap
 // (due to the escapes() call in ValueOf).
-
+/**
+ * 注意：下面的一些noescape注释从技术上来说是一个谎言，但在此软件包的上下文中是安全的。
+ * 诸如chansend和mapassign之类的功能不会转义引用对象，但可能会转义引用对象指向的任何内容（它们会做引用对象的浅拷贝）。
+ * 在此包中是安全的，因为引用对象只能指向Value可能指向的内容，并且始终位于堆中（由于ValueOf中的escapes（）调用）。
+ * @param
+ * @return
+ **/
 //go:noescape
+/**
+ * 通道接收
+ * @param
+ * @return
+ **/
 func chanrecv(ch unsafe.Pointer, nb bool, val unsafe.Pointer) (selected, received bool)
 
 //go:noescape
+/**
+ * 通道发送
+ * @param
+ * @return
+ **/
 func chansend(ch unsafe.Pointer, val unsafe.Pointer, nb bool) bool
 
+/**
+ * 创建通道
+ * @param
+ * @return
+ **/
 func makechan(typ *rtype, size int) (ch unsafe.Pointer)
+/**
+ * 创建map
+ * @param
+ * @return
+ **/
 func makemap(t *rtype, cap int) (m unsafe.Pointer)
 
 //go:noescape
+/**
+ * 访问map中的值
+ * @param
+ * @return
+ **/
 func mapaccess(t *rtype, m unsafe.Pointer, key unsafe.Pointer) (val unsafe.Pointer)
 
 //go:noescape
+/**
+ * map赋值
+ * @param
+ * @return
+ **/
 func mapassign(t *rtype, m unsafe.Pointer, key, val unsafe.Pointer)
 
 //go:noescape
+/**
+ * map删除key
+ * @param
+ * @return
+ **/
 func mapdelete(t *rtype, m unsafe.Pointer, key unsafe.Pointer)
 
 // m escapes into the return value, but the caller of mapiterinit
 // doesn't let the return value escape.
 //go:noescape
+/**
+ * map迭代器初始化
+ * m会转义为返回值，但mapiterinit的调用者不会让返回值转义。
+ * @param
+ * @return
+ **/
 func mapiterinit(t *rtype, m unsafe.Pointer) unsafe.Pointer
 
 //go:noescape
+/**
+ * 获取当前map迭代器的key
+ * @param
+ * @return
+ **/
 func mapiterkey(it unsafe.Pointer) (key unsafe.Pointer)
 
 //go:noescape
+/**
+ * 获取当前map迭代器的value
+ * @param
+ * @return
+ **/
 func mapiterelem(it unsafe.Pointer) (elem unsafe.Pointer)
 
 //go:noescape
+/**
+ * 获取当前map迭代器的下一个值
+ * @param
+ * @return
+ **/
 func mapiternext(it unsafe.Pointer)
 
 //go:noescape
+/**
+ * 获取map的大小
+ * @param
+ * @return
+ **/
 func maplen(m unsafe.Pointer) int
 
 // call calls fn with a copy of the n argument bytes pointed at by arg.
@@ -3581,43 +3763,91 @@ func maplen(m unsafe.Pointer) int
 // call can execute appropriate write barriers during the copy.
 //
 //go:linkname call runtime.reflectcall
+/**
+ * 使用arg指向的n个参数字节的副本调用fn。
+ * 在fn返回之后，reflectcall将n-retoffset结果字节复制回arg + retoffset，然后再返回。
+ * 如果将结果字节复制回去，则调用者必须将参数帧类型作为argtype传递，以便调用可以在复制期间执行适当的写障碍。
+ *
+ * go：linkname调用runtime.reflectcall
+ * @param
+ * @return
+ **/
 func call(argtype *rtype, fn, arg unsafe.Pointer, n uint32, retoffset uint32)
 
 func ifaceE2I(t *rtype, src interface{}, dst unsafe.Pointer)
 
 // memmove copies size bytes to dst from src. No write barriers are used.
 //go:noescape
+/**
+ * memmove将size大小字节从src复制到dst。 不使用写屏障。
+ * @param
+ * @return
+ **/
 func memmove(dst, src unsafe.Pointer, size uintptr)
 
 // typedmemmove copies a value of type t to dst from src.
 //go:noescape
+/**
+ * typedmemmove将类型t的值从src复制到dst。
+ * @param
+ * @return
+ **/
 func typedmemmove(t *rtype, dst, src unsafe.Pointer)
 
 // typedmemmovepartial is like typedmemmove but assumes that
 // dst and src point off bytes into the value and only copies size bytes.
 //go:noescape
+/**
+ * typedmemmovepartial类似于typedmemmove，但假定dst和src将字节指向该值，并且仅复制size大小字节。
+ * @param
+ * @return
+ **/
 func typedmemmovepartial(t *rtype, dst, src unsafe.Pointer, off, size uintptr)
 
 // typedmemclr zeros the value at ptr of type t.
 //go:noescape
+/**
+ * typedmemclr将类型t的ptr处的值清零。
+ * @param
+ * @return
+ **/
 func typedmemclr(t *rtype, ptr unsafe.Pointer)
 
 // typedmemclrpartial is like typedmemclr but assumes that
 // dst points off bytes into the value and only clears size bytes.
 //go:noescape
+/**
+ * typedmemclrpartial与typedmemclr类似，但假定dst将字节指向值，并且仅清除大小字节。
+ * @param
+ * @return
+ **/
 func typedmemclrpartial(t *rtype, ptr unsafe.Pointer, off, size uintptr)
 
 // typedslicecopy copies a slice of elemType values from src to dst,
 // returning the number of elements copied.
 //go:noescape
+/**
+ * typedslicecopy将elemType值的一部分从src复制到dst，返回复制的元素数。
+ * @param
+ * @return
+ **/
 func typedslicecopy(elemType *rtype, dst, src sliceHeader) int
 
 //go:noescape
+/**
+ * 对类型求hash值
+ * @param
+ * @return
+ **/
 func typehash(t *rtype, p unsafe.Pointer, h uintptr) uintptr
 
 // Dummy annotation marking that the value x escapes,
 // for use in cases where the reflect code is so clever that
 // the compiler cannot follow.
+/**
+ * Dummy类型，用于标记值x逃逸，
+ * 在反射代码非常聪明以至于编译器无法遵循的情况下使用。
+ */
 func escapes(x interface{}) {
 	if dummy.b {
 		dummy.x = x
