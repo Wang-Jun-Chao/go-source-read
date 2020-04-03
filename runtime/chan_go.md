@@ -20,7 +20,7 @@ package runtime
  * 不变量：
  * c.sendq和c.recvq中的至少一个为空，但在无缓冲通道上阻塞了单个goroutine以便使用select语句发送和接收的情况除外，在这种情况下，
  * c.sendq的长度 而c.recvq仅受select语句的大小限制。
-
+ *
  * 对于缓冲通道，还：
  * c.qcount> 0表示c.recvq为空。
  * c.qcount <c.dataqsiz表示c.sendq为空。
@@ -767,13 +767,15 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 			// 直接从发送发拷贝数据
 			recvDirect(c.elemtype, sg, ep)
 		}
-	} else {
+	} else { // 有缓冲通道
 		// Queue is full. Take the item at the
 		// head of the queue. Make the sender enqueue
 		// its item at the tail of the queue. Since the
 		// queue is full, those are both the same slot.
+		// 队列已满。 将item放在队列的开头。 使发送者将其item排入队列的末尾。
+		// 由于队列已满，因此它们都是相同的槽位。
 		qp := chanbuf(c, c.recvx)
-		if raceenabled {
+		if raceenabled { // 此值已经为false
 			raceacquire(qp)
 			racerelease(qp)
 			raceacquireg(sg.g, qp)
@@ -784,28 +786,38 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 			typedmemmove(c.elemtype, ep, qp)
 		}
 		// copy data from sender to queue
+		// 将数据从队列复制到接收者
 		typedmemmove(c.elemtype, qp, sg.elem)
-		c.recvx++
-		if c.recvx == c.dataqsiz {
+		c.recvx++ // 指向下一个接收位置
+		if c.recvx == c.dataqsiz { // 已经达到了末尾的下一个位置，需要重新指向头部
 			c.recvx = 0
 		}
-		c.sendx = c.recvx // c.sendx = (c.sendx+1) % c.dataqsiz
+		c.sendx = c.recvx // c.sendx = (c.sendx+1) % c.dataqsiz // 发送者位置前移
 	}
 	sg.elem = nil
 	gp := sg.g
-	unlockf()
+	unlockf() // 解锁
 	gp.param = unsafe.Pointer(sg)
 	if sg.releasetime != 0 {
 		sg.releasetime = cputicks()
 	}
-	goready(gp, skip+1)
+	// 将当前goroutine置于等待状态并解锁锁。 可以通过调用goready（gp）使goroutine重新运行
+	goready(gp, skip+1) // 标记go
 }
 
+/**
+ * 
+ * @param 
+ * @return 
+ **/
 func chanparkcommit(gp *g, chanLock unsafe.Pointer) bool {
 	// There are unlocked sudogs that point into gp's stack. Stack
 	// copying must lock the channels of those sudogs.
+	// 有未锁定的sudog指向gp的堆栈。堆栈复制必须锁定那些sudog的通道。
+	// activeStackChans指示存在指向该goroutine堆栈的未锁定通道。 
+	// 如果为true，则堆栈复制需要获取通道锁以保护堆栈的这些区域。
 	gp.activeStackChans = true
-	unlock((*mutex)(chanLock))
+	unlock((*mutex)(chanLock)) // 解锁
 	return true
 }
 
@@ -826,6 +838,11 @@ func chanparkcommit(gp *g, chanLock unsafe.Pointer) bool {
 //		... bar
 //	}
 //
+/**
+ * 编译器实现，将goroutine的select send(case c <- v)语句转成对应的方法执行
+ * @param
+ * @return
+ **/
 func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 	return chansend(c, elem, false, getcallerpc())
 }
@@ -847,6 +864,11 @@ func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {
 //		... bar
 //	}
 //
+/**
+ * 编译器实现，将goroutine的select receive(v = <-c)语句转成对应的方法执行
+ * @param
+ * @return
+ **/
 func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {
 	selected, _ = chanrecv(c, elem, false)
 	return
@@ -869,13 +891,28 @@ func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {
 //		... bar
 //	}
 //
+/**
+ * 编译器实现，将goroutine的select receive(case v, ok = <-c:)语句转成对应的方法执行
+ * @param
+ * @return
+ **/
 func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool) {
 	// TODO(khr): just return 2 values from this function, now that it is in Go.
+	// TODO（khr）：此函数位于Go中，只需返回2个值即可。表示这是一个历史遗留
 	selected, *received = chanrecv(c, elem, false)
 	return
 }
 
 //go:linkname reflect_chansend reflect.chansend
+/**
+ *
+ * go:linkname引导编译器将当前(私有)方法或者变量在编译时链接到指定的位置的方法或者变量，
+ * 第一个参数表示当前方法或变量，第二个参数表示目标方法或变量，因为这关指令会破坏系统和包的模块化，
+ * 因此在使用时必须导入unsafe
+ * 参见：https://blog.csdn.net/lastsweetop/article/details/78830772
+ * @param
+ * @return
+ **/
 func reflect_chansend(c *hchan, elem unsafe.Pointer, nb bool) (selected bool) {
 	return chansend(c, elem, !nb, getcallerpc())
 }
@@ -914,34 +951,46 @@ func reflect_chanclose(c *hchan) {
 	closechan(c)
 }
 
+/**
+ * 入队操作
+ * @param sudog 需要入队的元素
+ * @return
+ **/
 func (q *waitq) enqueue(sgp *sudog) {
 	sgp.next = nil
 	x := q.last
-	if x == nil {
+	if x == nil { // 队列中没有元素
 		sgp.prev = nil
 		q.first = sgp
 		q.last = sgp
 		return
 	}
+
+	// 队列中已经有元素
 	sgp.prev = x
 	x.next = sgp
 	q.last = sgp
 }
 
+/**
+ * 出队
+ * @param
+ * @return
+ **/
 func (q *waitq) dequeue() *sudog {
 	for {
 		sgp := q.first
-		if sgp == nil {
+		if sgp == nil { // 队列中没有元素
 			return nil
 		}
 		y := sgp.next
-		if y == nil {
+		if y == nil { // 队列中只有一个元素
 			q.first = nil
 			q.last = nil
 		} else {
 			y.prev = nil
 			q.first = y
-			sgp.next = nil // mark as removed (see dequeueSudog)
+			sgp.next = nil // mark as removed (see dequeueSudog) // 标记为已删除（请参阅dequeueSudog）
 		}
 
 		// if a goroutine was put on this queue because of a
@@ -952,6 +1001,10 @@ func (q *waitq) dequeue() *sudog {
 		// We use a flag in the G struct to tell us when someone
 		// else has won the race to signal this goroutine but the goroutine
 		// hasn't removed itself from the queue yet.
+		// 如果由于选择而将goroutine放在此队列中，则在其他情况下唤醒goroutine并获取通道锁之间会有一个小窗口。
+		// 一旦拥有了锁，它就会将自己从队列中删除，因此之后我们将看不到它。
+        // 我们在G结构中使用一个标志来告诉我们何时其他人赢得了发信号通知此goroutine的竞赛，
+        // 但goroutine尚未将自己从队列中删除。
 		if sgp.isSelect && !atomic.Cas(&sgp.g.selectDone, 0, 1) {
 			continue
 		}
@@ -966,9 +1019,16 @@ func (c *hchan) raceaddr() unsafe.Pointer {
 	// or dataqsiz, because the len() and cap() builtins read
 	// those addresses, and we don't want them racing with
 	// operations like close().
+	// 将通道上的读取和写入操作视为在此地址发生。 避免使用qcount或dataqsiz的地址，
+	// 因为内置的len()和cap()会读取这些地址，并且我们不希望它们与close()之类的操作竞争。
 	return unsafe.Pointer(&c.buf)
 }
 
+/**
+ * 这个方法现在看来没有什么用了
+ * @param
+ * @return
+ **/
 func racesync(c *hchan, sg *sudog) {
 	racerelease(chanbuf(c, 0))
 	raceacquireg(sg.g, chanbuf(c, 0))
