@@ -1,4 +1,137 @@
+chan.go是go语言通道实现，通道结构的定义，接收和发送的操作都此文件中实现。
+# 通道的结构
+hchan是通道表示的基本结构，其内容表示如下：
+一些特殊情况
+- 当dataqsiz=0时：说明这是一个无缓冲对列
+- 当dataqsiz>0时，说明是一个缓冲对列
+```go
+type hchan struct {
+    qcount   uint               // 队列中的数据总数
+    dataqsiz uint               // 循环队列的大小
+    buf      unsafe.Pointer     // 指向dataqsiz数组中的一个元素
+    elemsize uint16
+    closed   uint32             // 非0表示通道已经关闭
+    elemtype *_type             // 元素类型
+    sendx    uint               // 发送索引
+    recvx    uint               // 接收索引
+    recvq    waitq              // 所有等待的接收者
+    sendq    waitq              // 所有等待的发送者
 
+    // 锁保护hchan中的所有字段，以及此通道上阻止的sudogs中的多个字段。
+    // 保持该锁状态时，请勿更改另一个G的状态（特别是不要准备好G），因为这会因堆栈收缩而死锁。
+    // Question: sudogs？参见runtime/runtime2.go中的sudog结构
+    lock mutex
+}
+```
+# 通道的发送和接收
+通道的发送和接收都是使用了一个名为waitq的等待对例，每个接收者和发送者都是一个sudog结构，此构在runtiem/runtime2.go文件中定义，在之后的源码分析中会仔细说明。
+```go
+type waitq struct {
+	first *sudog    // 队列头
+	last  *sudog    // 队列尾
+}
+```
+
+# 通道的对齐方法式
+从文件的源码中可以知道，在内存中通道是以8字节的方式进行对齐的，内存分配不是8个字节会自动对对齐
+```go
+const (
+	maxAlign  = 8 // 8字节对齐
+	hchanSize = unsafe.Sizeof(hchan{}) + uintptr(-int(unsafe.Sizeof(hchan{}))&(maxAlign-1))
+	debugChan = false
+)
+```
+
+# 通道的使用
+## 通道的创建的方法
+在源码中通道的创建有三个实现方法
+- func reflect_makechan(t *chantype, size int) *hchan {...}
+- func makechan64(t *chantype, size int64) *hchan {...}
+- func makechan(t *chantype, size int) *hchan {...}
+其本质是调用最后一个通道的创建方法。
+## 通道的创建过程
+方法`func makechan(t *chantype, size int) *hchan {...}`说明了通道的整个创建过程。
+```go
+/**
+ * 创建通道
+ * @param t 通道类型指针
+ * @param size 通道大小，0表示无缓冲通道
+ * @return
+ **/
+func makechan(t *chantype, size int) *hchan {...}
+```
+通道创建要通过以过几个步骤。
+- 1、检查通道元素类型的size，如果`elem.size >= 1<<16`，则创建失败。
+- 2、检查通道和元素的对齐，如果`hchanSize%maxAlign != 0 || elem.align > maxAlign`，则通道创建失败
+- 3、计算通道需要分配的内存，如果`overflow || mem > maxAlloc-hchanSize || size < 0`，则通道创建失败
+    - 3.1、overflow：表示内存内存计算有溢出
+    - 3.2、mem > maxAlloc-hchanSize：表示内存分配置超出了限制
+    - 3.3、size < 0：表示通道缓冲为负数
+- 4、根据不同条件进行内存分配
+    - 4.1、mem == 0：队列或者元素大小为0，这是表示元素或者队列大小为0，直接分配hchanSize大小的内存，缓冲地址向自身
+    - 4.2、elem.ptrdata == 0：元素不包含指针，直接分配hchanSize+mem大小的内存，并且缓冲地址向自身+hchanSize
+    - 4.3、其他情况（元素包含指针）：使用new的方法创建一个hchan，分配mem大小的内存，并且缓冲地址向内存分配的地址
+- 5、最后设置通道结构的其他值
+
+## 向通道中发送数据
+向通道中发送数据的方法一共有四个，如下所示
+- func chansend1(c *hchan, elem unsafe.Pointer) {...}
+- func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {...}
+- func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {...}
+- func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {...}
+chansend1方法是go编译代码中c <- x的入口点，即当我们编写代码 c <- x时，就是调用此方法。chansend1方法本质还是调用chansend方法进行处理
+这四个方法的调用如下图所示
+```plantuml
+digraph send_call {
+    chansend1 -> chansend
+    chansend -> send
+    send -> sendDirect
+}
+```
+
+chansend方法的执行代表了事个数据的发送过程，方法签名如下：
+```go
+/**
+  * 通用单通道发送/接收
+  * 如果block不为nil，则协议将不会休眠，但如果无法完成则返回。
+  *
+  * 当涉及休眠的通道已关闭时，可以使用g.param == nil唤醒休眠。
+  * 最容易循环并重新运行该操作； 我们将看到它现已关闭。
+  * @param c 通道对象
+  * @param ep 元素指针
+  * @param block 是否阻塞
+  * @param callerpc 调用者指针
+  * @return bool true：表示发送成功
+  **/
+func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {...}
+```
+通道数据发送的处理过程：
+- 1、如果通道为空
+    - 1.1、通道是非阻塞的，则返回false，表示发送失败，方法结束
+    - 1.2、通道是阻塞的，则会阻塞当前goroutine，同时会执行一个throw方法，方法结束
+- 2、检查通道和数据状态，2.1，2.2，2.3同时满足时发关失败，方法结束
+    - 2.1、!block：通道非阻塞
+    - 2.2、c.closed == 0：通道未关闭
+    - 2.3、((c.dataqsiz == 0 && c.recvq.first == nil) || (c.dataqsiz > 0 && c.qcount == c.dataqsiz))
+        - 2.3.1、(c.dataqsiz == 0 && c.recvq.first == nil)：通道中没有数据，并且没有接收者
+        - 2.3.2、(c.dataqsiz > 0 && c.qcount == c.dataqsiz)：通道中有数据，并且已经满了
+- 3、对通道进行锁定
+- 4、判断通道是否已经关闭，如果已经关闭，就解锁通道，并且抛出panic。方法结束
+- 5、在接收者队列中找出一个最先入队的接收者，如果有，就调用send方法进行发送，返回true，方法结束
+- 6、如果没有找到接收者，并且c.qcount < c.dataqsiz，即通道的发送缓冲区未满，将要发送的数据拷贝到通道缓冲区，更新相关的计数据信息，并释放锁，返回true，方法结束
+- 7、没有找到接收都，并且没有缓冲可用，非阻塞方式，则解锁通道，返回false，发送失败
+- 8、没有找到接收都，并且没有缓冲可用，阻塞方式。获取gp(g)和mysg(sudog)，并且将发送数据挂到mysg上，将mysg加到发送队列。调用gopark访求将当前goroutine阻塞，直到被恢复。
+- 9、在恢复后我们还要将发送数据保活，以确保数据正确被接收者复制出去了。
+- 10、检查goroutine状态，如果mysg != gp.waiting说明被破坏了，执行throw，方法结束
+- 11、如果gp.param == nil，说明唤醒有问题，
+    - 11.1、如果通道未关闭，则说明是伪唤醒，执行throw方法结束
+    - 11.2、如果通道关闭，则panic，在关闭的通道中进行了发送消息。
+- 12、最后是清理数据，并且释放mysg
+
+
+
+
+# 源码
 ```go
 package runtime
 
@@ -95,7 +228,8 @@ func makechan64(t *chantype, size int64) *hchan {
 
 /**
  * 创建通道
- * @param
+ * @param t 通道类型指针
+ * @param size 通道大小，0表示无缓冲通道
  * @return
  **/
 func makechan(t *chantype, size int) *hchan {
