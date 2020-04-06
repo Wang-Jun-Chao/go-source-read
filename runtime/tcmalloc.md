@@ -25,7 +25,7 @@ TCMalloc将大小小于等于32KB的对象（“小”对象）与大对象区�
 
 线程缓存包含每个大小类别的空闲对象的单链列表。
 
-![IMAGE](quiver-image-url/67BBE3CD0AC56FB0ABFE1E56D1B53E7B.jpg =334x204)
+![IMAGE](http://goog-perftools.sourceforge.net/doc/threadheap.gif)
 
 当分配一个小对象时：
 - （1）我们将其大小映射到相应的大小类别。
@@ -46,7 +46,7 @@ TCMalloc将大小小于等于32KB的对象（“小”对象）与大对象区�
 ## 大对象分配
 大对象大小（> 32K）被四舍五入为页面大小（4K，即4K的整数倍），并由中央页面堆处理。中央页面堆也是一组空闲列表。对于i<256，第k条目是包含k个页面的运行的空闲列表。第256项是长度>=256个页面的免费空闲列表：
 
-![IMAGE](quiver-image-url/253D6B32F2F665A7A9F828581375349A.jpg =476x300)
+![IMAGE](http://goog-perftools.sourceforge.net/doc/pageheap.gif)
 
 通过在k空闲列表中查找，可以满足分配k个页面要求。如果该空闲列表为空，则我们查找下一个空闲列表，依此类推。最终，如有必要，我们将查找最后一个空闲列表。如果失败，我们从系统中获取内存（使用sbrk，mmap或通过映射/dev/mem的一部分）。
 
@@ -57,7 +57,7 @@ TCMalloc管理的堆由一组页面组成。大量的连续页由一个Span对�
 
 由页码索引的中央数组可用于查找页面所属的跨度。例如，下面的跨度a占2页，跨度b占1页，跨度c占5页，跨度d占3页。
 
-![IMAGE](quiver-image-url/0944E221EB1495BBB522152347579CF0.jpg =588x140)
+![IMAGE](http://goog-perftools.sourceforge.net/doc/spanmap.gif)
 
 32位地址空间可容纳2^20 4K页，因此此中央数组占用4MB的空间，这似乎可以接受。在64位计算机上，我们使用3级基数树而不是数组来将页码映射到相应的跨度指针。
 
