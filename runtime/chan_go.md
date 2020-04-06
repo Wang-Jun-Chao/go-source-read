@@ -80,15 +80,8 @@ func makechan(t *chantype, size int) *hchan {...}
 - func send(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {...}
 - func sendDirect(t *_type, sg *sudog, src unsafe.Pointer) {...}
 chansend1方法是go编译代码中c <- x的入口点，即当我们编写代码 c <- x时，就是调用此方法。chansend1方法本质还是调用chansend方法进行处理
-这四个方法的调用如下图所示
-```plantuml
-digraph send_call {
-    chansend1 -> chansend
-    chansend -> send
-    send -> sendDirect
-}
-```
-
+这四个方法的调用关系：`chansend1 -> chansend -> send -> sendDirect`
+### chansend方法
 chansend方法的执行代表了事个数据的发送过程，方法签名如下：
 ```go
 /**
@@ -120,7 +113,7 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {.
 - 5、在接收者队列中找出一个最先入队的接收者，如果有，就调用send方法进行发送，返回true，方法结束
 - 6、如果没有找到接收者，并且c.qcount < c.dataqsiz，即通道的发送缓冲区未满，将要发送的数据拷贝到通道缓冲区，更新相关的计数据信息，并释放锁，返回true，方法结束
 - 7、没有找到接收都，并且没有缓冲可用，非阻塞方式，则解锁通道，返回false，发送失败
-- 8、没有找到接收都，并且没有缓冲可用，阻塞方式。获取gp(g)和mysg(sudog)，并且将发送数据挂到mysg上，将mysg加到发送队列。调用gopark访求将当前goroutine阻塞，直到被恢复。
+- 8、没有找到接收者，并且没有缓冲可用，阻塞方式。获取gp(g)和mysg(sudog)，并且将发送数据挂到mysg上，将mysg加到发送队列。调用gopark访求将当前goroutine阻塞，直到被恢复。
 - 9、在恢复后我们还要将发送数据保活，以确保数据正确被接收者复制出去了。
 - 10、检查goroutine状态，如果mysg != gp.waiting说明被破坏了，执行throw，方法结束
 - 11、如果gp.param == nil，说明唤醒有问题，
@@ -128,8 +121,154 @@ func chansend(c *hchan, ep unsafe.Pointer, block bool, callerpc uintptr) bool {.
     - 11.2、如果通道关闭，则panic，在关闭的通道中进行了发送消息。
 - 12、最后是清理数据，并且释放mysg
 
+### 其他相关方法
+```go
+/**
+ * 编译器实现，将goroutine的select receive(v = <-c)语句转成对应的方法执行
+ * select {
+ * case v = <-c:
+ * 	... foo
+ * default:
+ * 	... bar
+ * }
+ * 
+ * => （实际对应）
+ * 
+ * if selectnbrecv(&v, c) {
+ * 	... foo
+ * } else {
+ * 	... bar
+ * }
+ */
+func selectnbsend(c *hchan, elem unsafe.Pointer) (selected bool) {...}
+```
 
 
+## 从通道中接收数据
+chan.go文件中一共有五个方法实现用于接收通道内容，他们分别是：
+- func chanrecv1(c *hchan, elem unsafe.Pointer) {...}，
+- func chanrecv2(c *hchan, elem unsafe.Pointer) (received bool) {...}
+- func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool) {...}
+- func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {...}
+- func recvDirect(t *_type, sg *sudog, dst unsafe.Pointer) {...}
+其调用链 (chanrecv1|chanrecv2) -> chanrecv -> recv -> recvDirect
+其中chanrecv1方法是go代码`<-c`的入口点
+### chanrecv方法
+chanrecv方法实现的通道接收的主要功能，其方法签名：
+```go
+/**
+ * 通用单通道发送/接收
+ * 如果block不为nil，则协议将不会休眠，但如果无法完成则返回。
+ *
+ * 当涉及休眠的通道已关闭时，可以使用g.param == nil唤醒休眠。
+ * 最容易循环并重新运行该操作； 我们将看到它现已关闭。
+ * @param c 通道对象
+ * @param ep 元素指针
+ * @param block 是否阻塞
+ * @param callerpc 调用者指针
+ * @return bool true：表示发送成功
+ **/
+func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool) {...}
+```
+通道数据接收的处理过程如下：
+- 1、如通道接收通道为nil
+    - 1.1、如果接收是非阻塞的，则返回false，方法结束
+    - 1.2、如果接收是阻塞的，则阻塞goroutine，即此goroutine会永久阻塞
+- 2、当2.1，2.2，2.3同时满足时，则返回false，方法结束
+    - 2.1、!block == true，即非阻塞
+    - 2.2、c.closed == 0，通道未关闭
+    - 2.3、2.3.1，2.3.2两个满足其中一个
+        - 2.3.1、c.dataqsiz == 0 && c.sendq.first == nil，通道中没有数据，并且没有发送者
+        - 2.3.2、c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0，通道中有空间，但没有数据
+- 3、加锁
+- 4、如果通道已经关闭，并且没有数据，则解锁，进行内存清理，返回(true, false)，方法结束
+- 5、从发送队列中取队头发送者，如果不为空，就用发送者发送的数据，返回(true, true)，方法结束
+- 6、没有发送者，数据队列不为空（c.qcount > 0），直接从数据队列中接收数据，并且更新队列计数和接收索引指针，然后复制数据，清理内存，释放锁，最后返回（true, true），方法结束
+- 7、没有发送者，并且队列为空，并且是非阻塞状态，则释放锁，返回（false, false），方法结束
+- 8、没有找到发送都，并且没有缓冲可用，阻塞方式。获取gp(g)和mysg(sudog)，并且将接收数据指针挂到mysg上，将mysg加到接收队列。调用gopark访求将当前goroutine阻塞，直到被恢复。
+- 9、在恢复后我们还是判断是否是意外唤醒，如果是，就panic，方法结束
+- 10、进行清理工作，释放sudog，返回（true, !closed）
+### recv方法
+通道另一个核心方法就是recv，其方法签名如下：
+```go
+/**
+ * recv在完整通道c上处理接收操作。
+ * 有2个部分：
+ *      1）将发送方sg发送的值放入通道中，并唤醒发送方以继续进行。
+ *      2）接收方接收到的值（当前G）被写入ep。
+ * 对于同步通道，两个值相同。
+ * 对于异步通道，接收者从通道缓冲区获取数据，而发送者的数据放入通道缓冲区。
+ * 频道c必须已满且已锁定。 recv用unlockf解锁c。
+ * sg必须已经从c中出队。
+ * 非nil必须指向堆或调用者的堆栈。
+ * @param c 通道对象针对
+ * @param sg sudog指针
+ * @param ep 用户接收元素的指针
+ * @param unlockf 解锁函数
+ * @param skip
+ * @return
+ **/
+func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {...}
+```
+recv接收数据的过程
+- 1、对于无缓冲通道（c.dataqsiz == 0），当数据指针不空的时候，直接拷贝发送指针所指的数据
+- 2、对于缓冲通道，将数据写入到缓冲中，并且更新缓冲计数，接收索引，发送索引
+- 3、进行goroutine相关处理，释放锁，并且将当前goroutine置于等待
+
+### 其他相关方法
+```go
+/**
+ * 编译器实现，将goroutine的select receive(v = <-c)语句转成对应的方法执行
+ * select {
+ * case v = <-c:
+ * 	... foo
+ * default:
+ * 	... bar
+ * }
+ * 
+ * => （实际对应）
+ * 
+ * if selectnbrecv(&v, c) {
+ * 	... foo
+ * } else {
+ * 	... bar
+ * }
+ **/
+func selectnbrecv(elem unsafe.Pointer, c *hchan) (selected bool) {...}
+
+/**
+ * 编译器实现，将goroutine的select receive(case v, ok = <-c:)语句转成对应的方法执行
+ * select {
+ * case v, ok = <-c:
+ *  ... foo
+ * default:
+ *  ... bar
+ * }
+ *
+ * => （实际对应）
+ *
+ * if c != nil && selectnbrecv2(&v, &ok, c) {
+ *  ... foo
+ * } else {
+ *  ... bar
+ * }
+ **/
+func selectnbrecv2(elem unsafe.Pointer, received *bool, c *hchan) (selected bool) {...}
+
+```
+
+## 通道关闭
+chan.go中只有一个关闭通道的方法
+- func closechan(c *hchan) {...}
+通过的关闭过程
+- 1、如果通道为nil，则painc，方法结束
+- 2、锁定通道
+- 3、如果通道已经关闭了，解锁通道，并且panic，方法结束，即通道只能关闭一次
+- 4、标记通道已经关闭
+- 5、释放所有的接收者，将接收者入gList队列
+- 6、释放所有的发送者，将发送者入gList队列
+- 7、释放锁
+- 8、将gLsit中的元素都标记成进入goready状态
 
 # 源码
 ```go
@@ -756,7 +895,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
     // 操作顺序在这里很重要：在进行抢占关闭时，反转操作可能导致错误的行为。
     // !block : 非阻塞
     // c.dataqsiz == 0 && c.sendq.first == nil : 通道没有空间，并且没有发送者
-    // c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0 :  通道中没有空间，并且没有数据
+    // c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0 :  通道中有空间，并且没有数据
     // atomic.Load(&c.closed) : 通道未关闭
 	if !block && (c.dataqsiz == 0 && c.sendq.first == nil ||
 		c.dataqsiz > 0 && atomic.Loaduint(&c.qcount) == 0) &&
@@ -798,7 +937,7 @@ func chanrecv(c *hchan, ep unsafe.Pointer, block bool) (selected, received bool)
 		// Receive directly from queue
 		// 直接从数据队列中接收数据
 		qp := chanbuf(c, c.recvx)
-		if raceenabled {
+		if raceenabled {未
 			raceacquire(qp)
 			racerelease(qp)
 		}
@@ -935,7 +1074,7 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 	if sg.releasetime != 0 {
 		sg.releasetime = cputicks()
 	}
-	// 将当前goroutine置于等待状态并解锁锁。 可以通过调用goready（gp）使goroutine重新运行
+	// 将当前goroutine置于等待状态并解锁。 可以通过调用goready（gp）使goroutine重新运行
 	goready(gp, skip+1) // 标记go
 }
 
@@ -957,8 +1096,8 @@ func chanparkcommit(gp *g, chanLock unsafe.Pointer) bool {
 
 // compiler implements
 //
-//	select {
-//	case c <- v:
+// select {
+// case c <- v:
 //		... foo
 //	default:
 //		... bar
