@@ -324,6 +324,11 @@ const (
     //   (1 << addr bits) = arena size * L1 entries * L2 entries
     //
     // Currently, we balance these as follows:
+    // 堆地址中的位数，堆arena的大小以及L1和L2 arena映射的大小与
+    //
+    // 1 << addr位）=arena大小* L1条目* L2条目
+    //
+    // 目前，我们将这些平衡如下：
     //
     //       Platform  Addr bits  Arena size  L1 entries   L2 entries
     // --------------  ---------  ----------  ----------  -----------
@@ -344,16 +349,26 @@ const (
     // This is particularly important with the race detector,
     // since it significantly amplifies the cost of committed
     // memory.
+    // heapArenaBytes是堆arenas的大小。堆由大小为heapArenaBytes的映射组成，
+    // 并与heapArenaBytes对齐。最初的堆映射是一个arenas。
+    //
+    // 当前在64位非Windows上为64MB，在32位和Windows上为4MB。我们在Windows上使用较小的arenas，
+    // 因为所有已提交的内存都由进程负责，即使未涉及也是如此。因此，对于具有小堆的进程，映射的arenas空间需要相对应。
+    // 这对于竞争检测器尤其重要，因为它会大大增加已提交内存的成本。
     heapArenaBytes = 1 << logHeapArenaBytes
 
     // logHeapArenaBytes is log_2 of heapArenaBytes. For clarity,
     // prefer using heapArenaBytes where possible (we need the
     // constant to compute some other constants).
+    // logHeapArenaBytes是heapArenaBytes的log_2。为了清楚起见，
+    // 最好在可能的地方使用heapArenaBytes（我们需要使用常量来计算其他常量）。
     logHeapArenaBytes = (6+20)*(_64bit*(1-sys.GoosWindows)*(1-sys.GoarchWasm)) + (2+20)*(_64bit*sys.GoosWindows) + (2+20)*(1-_64bit) + (2+20)*sys.GoarchWasm
 
     // heapArenaBitmapBytes is the size of each heap arena's bitmap.
+    // heapArenaBitmapBytes是每个堆arena的位图大小。
     heapArenaBitmapBytes = heapArenaBytes / (sys.PtrSize * 8 / 2)
 
+    // 每个arena所的页数
     pagesPerArena = heapArenaBytes / pageSize
 
     // arenaL1Bits is the number of bits of the arena number
@@ -369,6 +384,13 @@ const (
     // We use the L1 map on 64-bit Windows because the arena size
     // is small, but the address space is still 48 bits, and
     // there's a high cost to having a large L2.
+    // arenaL1Bits是第一级arena映射覆盖的arena编号的位数。
+    //
+    // 这个数字应该很小，因为第一级arena映射在二进制文件的BSS中需要PtrSize*(1<<arenaL1Bits)空间。
+    // 它可以为零，在这种情况下，第一级索引实际上未被使用。这会带来性能上的好处，
+    // 因为生成的代码可以更高效，但是以拥有较大的L2映射为代价。
+    //
+    // 我们在64位Windows上使用L1映射，因为arena大小很小，但是地址空间仍然是48位，并且拥有大型L2的成本很高。
     arenaL1Bits = 6 * (_64bit * sys.GoosWindows)
 
     // arenaL2Bits is the number of bits of the arena number
@@ -378,15 +400,21 @@ const (
     // 1<<arenaL2Bits, so it's important that this not be too
     // large. 48 bits leads to 32MB arena index allocations, which
     // is about the practical threshold.
+    // arenaL2Bits是第二级arena索引覆盖的arena编号的位数。
+    //
+    // 每个arena映射分配的大小与1<<arenaL2Bits成正比，因此，不要太大也很重要。
+    // 48位导致32MB arena索引分配，这大约是实际的阈值。
     arenaL2Bits = heapAddrBits - logHeapArenaBytes - arenaL1Bits
 
     // arenaL1Shift is the number of bits to shift an arena frame
     // number by to compute an index into the first level arena map.
+    // arenaL1Shift是将arena帧号移位以计算进入第一级arena映射的索引的位数。
     arenaL1Shift = arenaL2Bits
 
     // arenaBits is the total bits in a combined arena map index.
     // This is split between the index into the L1 arena map and
     // the L2 arena map.
+    // arenaBits是组合的arena映射索引中的总位。这在进入L1 arena映射和L2 arena映射的索引之间进行划分。
     arenaBits = arenaL1Bits + arenaL2Bits
 
     // arenaBaseOffset is the pointer value that corresponds to
@@ -404,12 +432,22 @@ const (
     //
     // On other platforms, the user address space is contiguous
     // and starts at 0, so no offset is necessary.
+    // arenaBaseOffset是与堆arena映射中的索引0对应的指针值。
+    //
+    // 在amd64上，地址空间为48位，符号扩展为64位。此偏移量使我们可以处理“负”地址（如果视为无符号，则为高地址）。
+    //
+    // 在aix/ppc64上，此偏移量允许将heapAddrBits保持为48。否则，为了处理mmap地址
+    //（范围为0x0a00000000000000-0x0afffffffffffffff），它将为60。但是在这种情况下，
+    // (s*pageAlloc).init中为块保留的内存会导致严重的速度下降。
+    //
+    // 在其他平台上，用户地址空间是连续的，并且从0开始，因此不需要偏移量。
     arenaBaseOffset = sys.GoarchAmd64*(1<<47) + (^0x0a00000000000000+1)&uintptrMask*sys.GoosAix
 
     // Max number of threads to run garbage collection.
     // 2, 3, and 4 are all plausible maximums depending
     // on the hardware details of the machine. The garbage
     // collector scales well to 32 cpus.
+    // 运行垃圾回收的最大线程数。 2、3和4都是合理的最大值，具体取决于机器的硬件细节。 垃圾收集器可以很好地扩展到32 cpus。
     _MaxGcproc = 32
 
     // minLegalPointer is the smallest possible legal pointer.
@@ -417,6 +455,9 @@ const (
     // since we assume that the first page is never mapped.
     //
     // This should agree with minZeroPage in the compiler.
+    //
+    // minLegalPointer是最小的合法指针。 这是可能的最小体系架构页大小，因为我们假设第一页从未映射过。
+    //这应该与编译器中的minZeroPage一致。
     minLegalPointer uintptr = 4096
 )
 
@@ -426,6 +467,11 @@ const (
 //
 // This must be set by the OS init code (typically in osinit) before
 // mallocinit.
+//
+// physPageSize是操作系统物理页面的大小（以字节为单位）。
+// 映射和取消映射操作必须以physPageSize的倍数完成。
+//
+// 必须在mallocinit之前通过OS初始化代码（通常在osinit中）进行设置。
 var physPageSize uintptr
 
 // physHugePageSize is the size in bytes of the OS's default physical huge
@@ -440,6 +486,15 @@ var physPageSize uintptr
 // physHugePageShift is defined as physHugePageSize == 1 << physHugePageShift.
 // The purpose of physHugePageShift is to avoid doing divisions in
 // performance critical functions.
+//
+// physHugePageSize是操作系统默认物理大页面大小的大小（以字节为单位），
+// 该大小对于应用程序是不透明的。 假定并验证为2的幂。
+//
+// 如果已设置，则必须在mallocinit之前通过OS初始化代码（通常在osinit中）进行设置。
+// 但是，完全设置它是可选的，并且保留默认值始终是安全的（尽管可能会降低效率）。
+//
+// 由于physHugePageSize始终假定为2的幂，因此physHugePageShift定义为physHugePageSize == 1 << physHugePageShift。
+// physHugePageShift的目的是避免对性能至关重要的功能进行划分。
 var (
     physHugePageSize  uintptr
     physHugePageShift uint
@@ -513,38 +568,95 @@ var (
 // sysFault transitions a memory region from Ready or Prepared to Reserved. It
 // marks a region such that it will always fault if accessed. Used only for
 // debugging the runtime.
-
+/**
+ * OS内存管理抽象层
+ *
+ * 在任何给定时间，运行时管理的地址空间区域可能处于四种状态之一：
+ * - 1）无（None）——未保留和未映射，这是任何区域的默认状态。
+ * - 2）保留（Reserved）——运行时拥有，但是访问它会导致故障。不计入进程的内存占用。
+ * - 3）已准备（Prepared）——保留，意在不由物理内存支持（尽管OS可能会延迟实现）。
+ *      可以有效过渡到就绪。在这样的区域中访问内存是不确定的（可能会出错，可能会返回意外的零等）。
+ * - 4）就绪（Ready）——可以安全地访问。
+ *
+ * 这组状态对于支持所有当前受支持的平台而言绝对不是必需的。只需一个“无”，“保留”和“就绪”就可以解决问题。
+ * 但是，“已准备”状态为我们提供了用于性能目的的灵活性。例如，在POSIX-y操作系统上，“保留”通常是设置了PROT_NONE的私有匿名mmap'd区域，
+ * 要转换到“就绪”状态，需要设置PROT_READ | PROT_WRITE。但是，Prepared的规格不足使我们仅使用MADV_FREE从Ready过渡到Prepared。
+ * 因此，在“准备好”状态下，我们可以提早设置一次权限位，我们可以有效地告诉操作系统，当我们严格不需要它们时，可以自由地将页面从我们手中夺走。
+ *
+ * 对于每个操作系统，都有一组通用的帮助程序，这些帮助程序在这些状态之间转换内存区域。帮助程序如下：
+ *
+ * sysAlloc
+ * sysAlloc将OS选择的内存区域从“无”转换为“就绪”。更具体地说，它从操作系统中获取大量的零位内存，通常大约为一百千字节或兆字节。
+ * 该内存始终可以立即使用。
+ *
+ * sysFree
+ * sysFree将内存区域从任何状态转换为“无（Ready）”。因此，它无条件返回内存。如果在分配过程中检测到内存不足错误，
+ * 或用于划分出地址空间的对齐部分，则使用此方法。仅当sysReserve始终返回与堆分配器的对齐限制对齐的内存区域时，
+ * 如果sysFree是无操作的，这是可以的。
+ *
+ * sysReserve
+ * sysReserve将内存区域从“无（None）”转换为“保留（Reserved）”。它以这样一种方式保留地址空间，
+ * 即在访问时（通过权限或未提交内存）会导致致命错误。因此，这种保留永远不会受到物理内存的支持。如果传递给它的指针为非nil，
+ * 则调用者希望在那里保留，但是sysReserve仍然可以选择另一个位置（如果该位置不可用）。
+ *
+ * 注意：sysReserve返回OS对齐的内存，但是堆分配器可能使用更大的对齐方式，因此调用者必须小心地重新对齐sysReserve获得的内存。
+ *
+ * sysMap
+ * sysMap将内存区域从“保留（Reserved）”状态转换为“已准备（Prepared）”状态。它确保可以将存储区域有效地转换为“就绪（Ready）”。
+ *
+ * sysUsed
+ * sysUsed将内存区域从“已准备（Prepared）”过渡到“就绪（Ready）”。它通知操作系统需要内存区域，并确保可以安全地访问该区域。
+ * 在没有明确的提交步骤和严格的过量提交限制的系统上，这通常是不操作的，例如，在Windows上至关重要。
+ *
+ * sysUnused
+ * sysUnused将内存区域从“就绪（Ready）”转换为“已准备（Prepared）”。它通知操作系统，不再需要支持该内存区域的物理页，
+ * 并且可以将其重新用于其他目的。 sysUnused内存区域的内容被认为是没用的，在调用sysUsed之前，不得再次访问该区域。
+ *
+ * sysFault
+ * sysFault将内存区域从“就绪（Ready）”或“已准备（Prepared）”转换为“保留（Reserved）”。它标记了一个区域，
+ * 以便在访问时总是会发生故障。仅用于调试运行时。
+ **/
 func mallocinit() {
+    // 检查_TinySizeClass与_TinySize对应关系
     if class_to_size[_TinySizeClass] != _TinySize {
         throw("bad TinySizeClass")
     }
 
+    // 确保映射到相同defer大小类别的defer arg大小也映射到相同的malloc大小类别。
     testdefersizes()
 
+    // 判断heapArenaBitmapBytes是否是2的指数次方
     if heapArenaBitmapBytes&(heapArenaBitmapBytes-1) != 0 {
         // heapBits expects modular arithmetic on bitmap
         // addresses to work.
+        // heapBits希望对位图地址进行模块化算术运算。
         throw("heapArenaBitmapBytes not a power of 2")
     }
 
     // Copy class sizes out for statistics table.
+    // 将类别大小拷贝到统计表
     for i := range class_to_size {
         memstats.by_size[i].size = uint32(class_to_size[i])
     }
 
     // Check physPageSize.
+    // 检查physPageSize。
     if physPageSize == 0 {
         // The OS init code failed to fetch the physical page size.
+        // 操作系统初始化代码无法获取物理页面大小。
         throw("failed to get system page size")
     }
+    // 物理页大小比最大物理页还大
     if physPageSize > maxPhysPageSize {
         print("system page size (", physPageSize, ") is larger than maximum page size (", maxPhysPageSize, ")\n")
         throw("bad system page size")
     }
+    // 物理页大小比最小物理页还小
     if physPageSize < minPhysPageSize {
         print("system page size (", physPageSize, ") is smaller than minimum page size (", minPhysPageSize, ")\n")
         throw("bad system page size")
     }
+
     if physPageSize&(physPageSize-1) != 0 {
         print("system page size (", physPageSize, ") must be a power of 2\n")
         throw("bad system page size")
