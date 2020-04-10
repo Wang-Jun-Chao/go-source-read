@@ -656,36 +656,43 @@ func mallocinit() {
         print("system page size (", physPageSize, ") is smaller than minimum page size (", minPhysPageSize, ")\n")
         throw("bad system page size")
     }
-
+    // 物理页必须是2的幂次方
     if physPageSize&(physPageSize-1) != 0 {
         print("system page size (", physPageSize, ") must be a power of 2\n")
         throw("bad system page size")
     }
+    // 操作系统默认页大小，物理页必须是2的幂次方
     if physHugePageSize&(physHugePageSize-1) != 0 {
         print("system huge page size (", physHugePageSize, ") must be a power of 2\n")
         throw("bad system huge page size")
     }
+    // 操作系统默认页大小大于操作系统最大的页大小
     if physHugePageSize > maxPhysHugePageSize {
         // physHugePageSize is greater than the maximum supported huge page size.
         // Don't throw here, like in the other cases, since a system configured
         // in this way isn't wrong, we just don't have the code to support them.
         // Instead, silently set the huge page size to zero.
+        // physHugePageSize大于所支持的最大大页面大小。不要像其他情况那样在这里throw错误，
+        // 因为以这种方式配置的系统没有错，所以我们只是没有支持它们的代码。而是将巨大的页面大小静默设置为零。
         physHugePageSize = 0
     }
     if physHugePageSize != 0 {
         // Since physHugePageSize is a power of 2, it suffices to increase
         // physHugePageShift until 1<<physHugePageShift == physHugePageSize.
+        // 由于physHugePageSize为2的幂，因此足以将physHugePageShift增大到1<<physHugePageShift == physHugePageSize。
         for 1<<physHugePageShift != physHugePageSize {
             physHugePageShift++
         }
     }
 
     // Initialize the heap.
+    // 初始化堆
     mheap_.init()
     _g_ := getg()
     _g_.m.mcache = allocmcache()
 
     // Create initial arena growth hints.
+    // 创建初始arena增长提示。8表示字节数
     if sys.PtrSize == 8 {
         // On a 64-bit machine, we pick the following hints
         // because:
@@ -720,7 +727,27 @@ func mallocinit() {
         //
         // On AIX, mmaps starts at 0x0A00000000000000 for 64-bit.
         // processes.
-        for i := 0x7f; i >= 0; i-- {
+        //
+        // 在64位计算机上，我们选择以下hit因为：
+        //
+        // 1.从地址空间的中间开始，可以轻松扩展到连续范围，而无需运行其他映射。
+        //
+        // 2.这使Go堆地址在调试时更容易识别。
+        //
+        // 3. gccgo中的堆栈扫描仍然很保守，因此将地址与其他数据区分开很重要。
+        //
+        // 从0x00c0开始意味着有效的内存地址将从0x00c0、0x00c1 ... n 小端开始，即c0 00，c1 00，...
+        // 这些都不是有效的UTF-8序列，否则它们是尽可能远离ff（可能是一个公共字节）。
+        // 如果失败，我们尝试其他0xXXc0地址。较早的尝试使用0x11f8导致线程分配期间OS X上的内存不足错误。
+        // 0x00c0导致与AddressSanitizer发生冲突，后者保留了最多0x0100的所有内存。
+        // 这些选择减少了保守的垃圾收集器不收集内存的可能性，因为某些非指针内存块具有与内存地址匹配的位模式。
+        //
+        // 但是，在arm64上，我们忽略了上面的所有建议，并在0x40 << 32处分配，因为当使用具有3级转换缓冲区的4k页面时，
+        // 用户地址空间在darwin/arm64上被限制为39位，地址空间更小。
+        //
+        // 在AIX上，对于64位，mmaps从0x0A00000000000000开始。
+        // 预先进行内存分配，最多分配64次
+        for i := 0x7f; i >= 0; i-- { // i=0b01111111
             var p uintptr
             switch {
             case GOARCH == "arm64" && GOOS == "darwin":
@@ -731,10 +758,11 @@ func mallocinit() {
                 if i == 0 {
                     // We don't use addresses directly after 0x0A00000000000000
                     // to avoid collisions with others mmaps done by non-go programs.
+                    // 我们不会在0x0A00000000000000之后直接使用地址，以免与非执行程序造成的其他mmap冲突。
                     continue
                 }
                 p = uintptr(i)<<40 | uintptrMask&(0xa0<<52)
-            case raceenabled:
+            case raceenabled: // 此值已为false
                 // The TSAN runtime requires the heap
                 // to be in the range [0x00c000000000,
                 // 0x00e000000000).
@@ -745,6 +773,9 @@ func mallocinit() {
             default:
                 p = uintptr(i)<<40 | uintptrMask&(0x00c0<<32)
             }
+            // p是所求的每个hint起始地址
+            // 采用头插法对hint块进行拉链，小端地址在前
+            // 最终所有的地址都分配在了mheap_.arenaHints上
             hint := (*arenaHint)(mheap_.arenaHintAlloc.alloc())
             hint.addr = p
             hint.next, mheap_.arenaHints = mheap_.arenaHints, hint
