@@ -797,10 +797,21 @@ func mallocinit() {
         //
         // 3. We try to stake out a reasonably large initial
         // heap reservation.
-
+        //
+        // 在32位计算机上，我们更加关注保持可用堆是连续的。
+        // 因此：
+        //
+        // 1.我们为所有的heapArena保留空间，这样它们就不会与heap交错。 它们约为258MB，因此还算不错。
+        // （如果出现问题，我们可以在前面预留较小的空间。）
+        //
+        // 2.我们建议堆从二进制文件的末尾开始，因此我们有最大的机会保持其连续性。
+        //
+        // 3.我们尝试放出一个相当大的初始堆保留。
+        // 计算arena元数据大小
         const arenaMetaSize = (1 << arenaBits) * unsafe.Sizeof(heapArena{})
+        // 保留内存
         meta := uintptr(sysReserve(nil, arenaMetaSize))
-        if meta != 0 {
+        if meta != 0 { // 保留成功，就进行初始化
             mheap_.heapArenaAlloc.init(meta, arenaMetaSize)
         }
 
@@ -811,6 +822,11 @@ func mallocinit() {
         // region over it (which will cause the kernel to put
         // the region somewhere else, likely at a high
         // address).
+        // 我们想从低arena地址开始，但是如果我们与C代码链接，则可能全局构造函数调用了malloc并调整了进程的brk。
+        // 查询brk，以便我们避免尝试在其上映射区域（这将导致内核将区域放置在其他地方，可能位于高地址）。
+        // brk和sbrk相关文档
+        // https://blog.csdn.net/yusiguyuan/article/details/39496057
+        // https://blog.csdn.net/Apollon_krj/article/details/54565768
         procBrk := sbrk0()
 
         // If we ask for the end of the data segment but the
@@ -820,6 +836,9 @@ func mallocinit() {
         // buggy, as usual: it won't adjust the pointer
         // upward. So adjust it upward a little bit ourselves:
         // 1/4 MB to get away from the running binary image.
+        // 如果我们要求结束数据段，但是操作系统在开始分配之前需要更多空间，它将给出稍高的指针。
+        // 像往常一样，除了QEMU之外，它还有很多问题：它不会向上调整指针。 因此，我们自己向上调整一点：
+        // 1/4 MB以远离正在运行的二进制映像。
         p := firstmoduledata.end
         if p < procBrk {
             p = procBrk
@@ -827,15 +846,20 @@ func mallocinit() {
         if mheap_.heapArenaAlloc.next <= p && p < mheap_.heapArenaAlloc.end {
             p = mheap_.heapArenaAlloc.end
         }
+        // alignUp(n, a) alignUp将n舍入为a的倍数。 a必须是2的幂。
         p = alignUp(p+(256<<10), heapArenaBytes)
         // Because we're worried about fragmentation on
         // 32-bit, we try to make a large initial reservation.
+        // 因为我们担心32位上的碎片，所以我们尝试进行较大的初始保留。
         arenaSizes := []uintptr{
             512 << 20,
             256 << 20,
             128 << 20,
         }
+        // 从在到小尝试分配，首次分配好就结束
         for _, arenaSize := range arenaSizes {
+            // sysReserveAligned类似于sysReserve，但是返回的指针字节对齐的。
+            // 它可以保留n个或n+align个字节，因此它返回保留的大小。
             a, size := sysReserveAligned(unsafe.Pointer(p), arenaSize, heapArenaBytes)
             if a != nil {
                 mheap_.arena.init(uintptr(a), size)
