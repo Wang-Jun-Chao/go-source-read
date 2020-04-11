@@ -883,10 +883,24 @@ func mallocinit() {
 // be transitioned to Ready before use.
 //
 // h must be locked.
+/**
+ * sysAlloc至少为n个字节分配堆arena空间。返回的指针始终是heapArenaBytes对齐的，
+ * 并由h.arenas元数据支持。返回的大小始终是heapArenaBytes的倍数。 sysAlloc失败时返回nil。
+ * 没有相应的free函数。
+ *
+ * sysAlloc返回处于Prepared状态的内存区域。使用前，该区域必须转换为“就绪”。
+ *
+ * h必须被锁定。
+ * @param n 待分配的字节数
+ * @return v 地址指针
+ * @return size 分配的字节数
+ **/
 func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
+    // 进行字节对齐
     n = alignUp(n, heapArenaBytes)
 
     // First, try the arena pre-reservation.
+    // 首先，尝试arena预定。
     v = h.arena.alloc(n, heapArenaBytes, &memstats.heap_sys)
     if v != nil {
         size = n
@@ -894,6 +908,7 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
     }
 
     // Try to grow the heap at a hint address.
+    // 尝试在hint地址处增加堆。
     for h.arenaHints != nil {
         hint := h.arenaHints
         p := hint.addr
@@ -902,15 +917,18 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
         }
         if p+n < p {
             // We can't use this, so don't ask.
+            // 我们不能使用它，所以不回应。
             v = nil
         } else if arenaIndex(p+n-1) >= 1<<arenaBits {
             // Outside addressable heap. Can't use.
+            // 外部可寻址堆。无法使用。
             v = nil
         } else {
             v = sysReserve(unsafe.Pointer(p), n)
         }
         if p == uintptr(v) {
             // Success. Update the hint.
+            // 成功。更新hint。
             if !hint.down {
                 p += n
             }
@@ -924,6 +942,10 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
         // told to only return the requested address. In
         // particular, this is already how Windows behaves, so
         // it would simplify things there.
+        // 失败了放弃此hint，然后尝试下一个。
+        //
+        // TODO：如果可以告诉sysReserve仅返回所请求的地址，则这样做会更清洁。
+        // 特别是，这已经是Windows的处理方式，因此它将简化那里的事情。
         if v != nil {
             sysFree(v, n, nil)
         }
@@ -932,7 +954,7 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
     }
 
     if size == 0 {
-        if raceenabled {
+        if raceenabled { // 此值已为false
             // The race detector assumes the heap lives in
             // [0x00c000000000, 0x00e000000000), but we
             // just ran out of hints in this region. Give
@@ -943,12 +965,14 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
         // All of the hints failed, so we'll take any
         // (sufficiently aligned) address the kernel will give
         // us.
+        // 所有hint均失败，因此我们将采用内核将提供给我们的任何地址（已充分对齐）。
         v, size = sysReserveAligned(nil, n, heapArenaBytes)
         if v == nil {
             return nil, 0
         }
 
         // Create new hints for extending this region.
+        // 创建用于扩展此区域的新hint。
         hint := (*arenaHint)(h.arenaHintAlloc.alloc())
         hint.addr, hint.down = uintptr(v), true
         hint.next, mheap_.arenaHints = mheap_.arenaHints, hint
@@ -958,6 +982,7 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
     }
 
     // Check for bad pointers or pointers we can't use.
+    // 检查错误的指针或我们不能使用的指针。
     {
         var bad string
         p := uintptr(v)
@@ -971,6 +996,7 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
         if bad != "" {
             // This should be impossible on most architectures,
             // but it would be really confusing to debug.
+            // 在大多数体系结构上，这应该是不可能的，但是调试起来确实很混乱。
             print("runtime: memory allocated by OS [", hex(p), ", ", hex(p+size), ") not in usable address space: ", bad, "\n")
             throw("memory reservation exceeds address space limit")
         }
@@ -981,14 +1007,17 @@ func (h *mheap) sysAlloc(n uintptr) (v unsafe.Pointer, size uintptr) {
     }
 
     // Transition from Reserved to Prepared.
+    // 转换状态将从预留到已准备。
     sysMap(v, size, &memstats.heap_sys)
 
 mapped:
     // Create arena metadata.
+    // 创建arena元数据。
     for ri := arenaIndex(uintptr(v)); ri <= arenaIndex(uintptr(v)+size-1); ri++ {
         l2 := h.arenas[ri.l1()]
         if l2 == nil {
             // Allocate an L2 arena map.
+            // 分配L2arena映射。
             l2 = (*[1 << arenaL2Bits]*heapArena)(persistentalloc(unsafe.Sizeof(*l2), sys.PtrSize, nil))
             if l2 == nil {
                 throw("out of memory allocating heap arena map")
@@ -1009,6 +1038,7 @@ mapped:
         }
 
         // Add the arena to the arenas list.
+        // 将arena添加到arena列表中。
         if len(h.allArenas) == cap(h.allArenas) {
             size := 2 * uintptr(cap(h.allArenas)) * sys.PtrSize
             if size == 0 {
@@ -1025,6 +1055,8 @@ mapped:
             // there may be concurrent readers. Since we
             // double the array each time, this can lead
             // to at most 2x waste.
+            // 不要释放旧的后备阵列，因为可能有并发读取器。
+            // 由于我们每次将阵列加倍，因此最多可能导致2倍的浪费。
         }
         h.allArenas = h.allArenas[:len(h.allArenas)+1]
         h.allArenas[len(h.allArenas)-1] = ri
@@ -1033,10 +1065,12 @@ mapped:
         // new heap arena becomes visible before the heap lock
         // is released (which shouldn't happen, but there's
         // little downside to this).
+        // 以原子方式存储，以防新的堆空间中的对象在释放堆锁之前可见（这不应该发生，但这没有什么坏处）。
         atomic.StorepNoWB(unsafe.Pointer(&l2[ri.l2()]), unsafe.Pointer(r))
     }
 
     // Tell the race detector about the new heap memory.
+    // 告诉竞态检测器新的堆内存。
     if raceenabled {
         racemapshadow(v, size)
     }
