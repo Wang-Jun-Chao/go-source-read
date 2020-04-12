@@ -1081,30 +1081,46 @@ mapped:
 // sysReserveAligned is like sysReserve, but the returned pointer is
 // aligned to align bytes. It may reserve either n or n+align bytes,
 // so it returns the size that was reserved.
+/**
+ * sysReserveAligned类似于sysReserve，但是返回的指针以字节对齐。
+ * 它可以保留n个或n+align个字节，因此它返回保留的大小。
+ * @param v 地址指针
+ * @param size 待分配的字节数
+ * @param align 对齐的字节数
+ * @return unsafe.Pointer 新的地址指针
+ * @return uintptr 分配的字节数
+ **/
 func sysReserveAligned(v unsafe.Pointer, size, align uintptr) (unsafe.Pointer, uintptr) {
     // Since the alignment is rather large in uses of this
     // function, we're not likely to get it by chance, so we ask
     // for a larger region and remove the parts we don't need.
+    // 由于在使用此功能时对齐方式相当大，因此我们不太可能偶然得到它，
+    // 因此我们要求更大的区域并删除不需要的部分。
     retries := 0
 retry:
+    // 先进行未对齐内存保留
     p := uintptr(sysReserve(v, size+align))
     switch {
-    case p == 0:
+    case p == 0: // 未分配成功
         return nil, 0
     case p&(align-1) == 0:
         // We got lucky and got an aligned region, so we can
         // use the whole thing.
+        // 我们很幸运或取到一个对齐区域，所以我们可以使用整个分配的内存。
         return unsafe.Pointer(p), size + align
     case GOOS == "windows":
         // On Windows we can't release pieces of a
         // reservation, so we release the whole thing and
         // re-reserve the aligned sub-region. This may race,
         // so we may have to try again.
+        // 在Windows上，我们无法释放部分保留内存，因此我们释放整个内容并重新保留对齐的子区域。
+        // 这可能会生产竞争，所以我们可能必须重试。
         sysFree(unsafe.Pointer(p), size+align, nil)
         p = alignUp(p, align)
         p2 := sysReserve(unsafe.Pointer(p), size)
         if p != uintptr(p2) {
             // Must have raced. Try again.
+            //
             sysFree(p2, size, nil)
             if retries++; retries == 100 {
                 throw("failed to allocate aligned heap memory; too many retries")
