@@ -807,7 +807,7 @@ func mapaccess2_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) (unsafe.Point
 /**
  * 与mapaccess类似，但是如果map中不存在key，则为该key分配一个位置。
  * @param
- * @return
+ * @return key对应elem的插入位置指针
  **/
 func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	if h == nil {
@@ -869,13 +869,14 @@ bucketloop:
 				continue
 			}
 			// already have a mapping for key. Update it.
+			// 已经有一个key映射。更新它。
 			if t.needkeyupdate() {
 				typedmemmove(t.key, k, key)
 			}
 			elem = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
 			goto done
 		}
-		ovf := b.overflow(t)
+		ovf := b.overflow(t) // 找下一个溢出桶进行处理
 		if ovf == nil {
 			break
 		}
@@ -883,16 +884,19 @@ bucketloop:
 	}
 
 	// Did not find mapping for key. Allocate new cell & add entry.
+	// 找不到键的映射。分配新单元格并添加条目。
 
 	// If we hit the max load factor or we have too many overflow buckets,
 	// and we're not already in the middle of growing, start growing.
+	// 如果我们达到最大负载因子，或者我们有太多的溢出桶，而我们还没有处于增长过程，那就开始增长。
 	if !h.growing() && (overLoadFactor(h.count+1, h.B) || tooManyOverflowBuckets(h.noverflow, h.B)) {
 		hashGrow(t, h)
-		goto again // Growing the table invalidates everything, so try again
+		goto again // Growing the table invalidates everything, so try again // 扩容表格会使所有内容失效，因此请重试
 	}
 
 	if inserti == nil {
 		// all current buckets are full, allocate a new one.
+		// 当前所有存储桶已满，请分配一个新的存储桶。
 		newb := h.newoverflow(t, b)
 		inserti = &newb.tophash[0]
 		insertk = add(unsafe.Pointer(newb), dataOffset)
@@ -900,12 +904,13 @@ bucketloop:
 	}
 
 	// store new key/elem at insert position
-	if t.indirectkey() {
+	// 在插入位置存储新的key/elem
+	if t.indirectkey() { // 插入key
 		kmem := newobject(t.key)
 		*(*unsafe.Pointer)(insertk) = kmem
 		insertk = kmem
 	}
-	if t.indirectelem() {
+	if t.indirectelem() { // 插入elem
 		vmem := newobject(t.elem)
 		*(*unsafe.Pointer)(elem) = vmem
 	}
@@ -924,6 +929,11 @@ done:
 	return elem
 }
 
+/**
+ * 删除key
+ * @param
+ * @return
+ **/
 func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
@@ -940,7 +950,7 @@ func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 		}
 		return
 	}
-	if h.flags&hashWriting != 0 {
+	if h.flags&hashWriting != 0 { // 当前map正在被写，不能再写
 		throw("concurrent map writes")
 	}
 
@@ -948,6 +958,8 @@ func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 
 	// Set hashWriting after calling t.hasher, since t.hasher may panic,
 	// in which case we have not actually done a write (delete).
+	// 在调用t.hasher之后设置hashWriting，因为t.hasher可能会出现panic情况，
+	// 在这种情况下，我们实际上并未执行写入（删除）操作。
 	h.flags ^= hashWriting
 
 	bucket := hash & bucketMask(h.B)
@@ -971,44 +983,50 @@ search:
 			if t.indirectkey() {
 				k2 = *((*unsafe.Pointer)(k2))
 			}
-			if !t.key.equal(key, k2) {
+			if !t.key.equal(key, k2) { // 两个key不相等
 				continue
 			}
 			// Only clear key if there are pointers in it.
+			// 如果其中有指针，则仅清除键。
 			if t.indirectkey() {
 				*(*unsafe.Pointer)(k) = nil
 			} else if t.key.ptrdata != 0 {
 				memclrHasPointers(k, t.key.size)
 			}
 			e := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
-			if t.indirectelem() {
+			if t.indirectelem() { // elem是间接指针，将指针赋空
 				*(*unsafe.Pointer)(e) = nil
-			} else if t.elem.ptrdata != 0 {
+			} else if t.elem.ptrdata != 0 { // 元素有指针数据，将清除指针数据
 				memclrHasPointers(e, t.elem.size)
-			} else {
+			} else { // 清除e的数据
 				memclrNoHeapPointers(e, t.elem.size)
 			}
-			b.tophash[i] = emptyOne
+			b.tophash[i] = emptyOne // 标记桶为空
 			// If the bucket now ends in a bunch of emptyOne states,
 			// change those to emptyRest states.
 			// It would be nice to make this a separate function, but
 			// for loops are not currently inlineable.
+			// 如果存储桶现在以一堆emptyOne状态结束，则将其更改为emptyRest状态。
+			// 将此功能设为单独的函数会很好，但是for循环当前不可内联。
 			if i == bucketCnt-1 {
+			    // 有下一个溢出桶，并且溢出桶有值
 				if b.overflow(t) != nil && b.overflow(t).tophash[0] != emptyRest {
 					goto notLast
 				}
-			} else {
+			} else { // 没有溢出桶了，但是当前位置之后的位置还有值
 				if b.tophash[i+1] != emptyRest {
 					goto notLast
 				}
 			}
-			for {
-				b.tophash[i] = emptyRest
+			for { // 当前桶的当前位置之后都没有值了
+				b.tophash[i] = emptyRest // 标记当前位置已经空
 				if i == 0 {
 					if b == bOrig {
+					    // 从初始存储桶开始，我们已经处理完了。
 						break // beginning of initial bucket, we're done.
 					}
 					// Find previous bucket, continue at its last entry.
+					// 查找上一个存储桶，直到最后一个。
 					c := b
 					for b = bOrig; b.overflow(t) != c; b = b.overflow(t) {
 					}
