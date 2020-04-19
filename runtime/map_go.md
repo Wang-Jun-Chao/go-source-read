@@ -187,7 +187,7 @@ type hmap struct {
 	buckets    unsafe.Pointer // array of 2^B Buckets. may be nil if count==0.
 	// 上一存储桶数组，只有当前桶的一半大小，只有在增长时才为非nil
 	oldbuckets unsafe.Pointer // previous bucket array of half the size, non-nil only when growing
-	// 疏散进度计数器（小于此的桶表明已被疏散）
+	// 迁移进度计数器（小于此的桶表明已被迁移）
 	nevacuate  uintptr        // progress counter for evacuation (buckets less than this have been evacuated)
 
     // 可选择字段
@@ -229,7 +229,7 @@ type bmap struct {
 	// for each key in this bucket. If tophash[0] < minTopHash,
 	// tophash[0] is a bucket evacuation state instead.
 	// tophash通常包含此存储桶中每个键的哈希值的最高字节。如果tophash[0] < minTopHash，
-	// 则tophash[0]是桶疏散状态。
+	// 则tophash[0]是桶迁移状态。
 	tophash [bucketCnt]uint8
 	// Followed by bucketCnt keys and then bucketCnt elems.
 	// NOTE: packing all the keys together and then all the elems together makes the
@@ -635,7 +635,7 @@ func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 			m >>= 1
 		}
 		oldb := (*bmap)(add(c, (hash&m)*uintptr(t.bucketsize))) // 计算旧桶的位置
-		if !evacuated(oldb) { // 旧桶的元素没有被疏散，取旧桶的值
+		if !evacuated(oldb) { // 旧桶的元素没有被迁移，取旧桶的值
 			b = oldb
 		}
 	}
@@ -1054,6 +1054,14 @@ search:
 // The hiter struct pointed to by 'it' is allocated on the stack
 // by the compilers order pass or on the heap by reflect_mapiterinit.
 // Both need to have zeroed hiter since the struct contains pointers.
+/**
+ * mapiterinit初始化用于在map上进行遍历的hiter结构。
+ * “it”所指向的hiter结构是由编译器顺序传递在堆栈上分配的，或者由reflect_mapiterinit在堆上分配的。
+ * 由于结构包含指针，因此两者都需要将hiter归零。
+ * @param t 映射类型
+ * @param h 要遍历的map
+ * @param 迭代器对象
+ **/
 func mapiterinit(t *maptype, h *hmap, it *hiter) {
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
@@ -1064,13 +1072,14 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 		return
 	}
 
-	if unsafe.Sizeof(hiter{})/sys.PtrSize != 12 {
+	if unsafe.Sizeof(hiter{})/sys.PtrSize != 12 { // hiter{}的大小必须是指针大小的12倍
 		throw("hash_iter size incorrect") // see cmd/compile/internal/gc/reflect.go
 	}
 	it.t = t
 	it.h = h
 
 	// grab snapshot of bucket state
+	// 抓取桶状态快照
 	it.B = h.B
 	it.buckets = h.buckets
 	if t.bucket.ptrdata == 0 {
@@ -1078,31 +1087,44 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 		// This preserves all relevant overflow buckets alive even if
 		// the table grows and/or overflow buckets are added to the table
 		// while we are iterating.
+		// 分配当前切片，并记住指向当前和旧指针。
+        // 这样即使表不断增长和/或在我们进行迭代时将溢出桶添加到表中，
+        // 也可以使所有相关的溢出桶保持活动状态。
 		h.createOverflow()
 		it.overflow = h.extra.overflow
 		it.oldoverflow = h.extra.oldoverflow
 	}
 
 	// decide where to start
+	// 决定从哪里开始
 	r := uintptr(fastrand())
+	// fastrand()只产生32位hash，当hash表过大时需要生产新的高位hash值
 	if h.B > 31-bucketCntBits {
-		r += uintptr(fastrand()) << 31
+		r += uintptr(fastrand()) << 31 // 对于超级大的桶，产生高位hash值
 	}
-	it.startBucket = r & bucketMask(h.B)
-	it.offset = uint8(r >> h.B & (bucketCnt - 1))
+	it.startBucket = r & bucketMask(h.B) // 记录桶起始位置
+	it.offset = uint8(r >> h.B & (bucketCnt - 1)) // 记录桶内偏移量
 
 	// iterator state
+	// 迭代器状态，即记录当前迭代器所在的桶
 	it.bucket = it.startBucket
 
 	// Remember we have an iterator.
 	// Can run concurrently with another mapiterinit().
+	// 记住我们有一个迭代器。可以与另一个mapiterinit（）同时运行。
 	if old := h.flags; old&(iterator|oldIterator) != iterator|oldIterator {
 		atomic.Or8(&h.flags, iterator|oldIterator)
 	}
 
+    // 开始迭代
 	mapiternext(it)
 }
 
+/**
+ * 进行map迭代
+ * @param
+ * @return
+ **/
 func mapiternext(it *hiter) {
 	h := it.h
 	if raceenabled {
@@ -1114,13 +1136,13 @@ func mapiternext(it *hiter) {
 	}
 	t := it.t
 	bucket := it.bucket
-	b := it.bptr
+	b := it.bptr // 当前桶
 	i := it.i
 	checkBucket := it.checkBucket
 
 next:
-	if b == nil {
-		if bucket == it.startBucket && it.wrapped {
+	if b == nil { // 当前桶为空
+		if bucket == it.startBucket && it.wrapped { // 再次到达起始位置，说明迭代已经结束
 			// end of iteration
 			it.key = nil
 			it.elem = nil
@@ -1131,9 +1153,11 @@ next:
 			// If the bucket we're looking at hasn't been filled in yet (i.e. the old
 			// bucket hasn't been evacuated) then we need to iterate through the old
 			// bucket and only return the ones that will be migrated to this bucket.
+			// 迭代器是在增长过程中启动的，尚未完成增长。如果我们要查看的存储桶尚未填充（即尚未迁移旧存储桶），
+			// 则我们需要遍历旧存储桶，只返回将要迁移到该存储桶的存储桶。
 			oldbucket := bucket & it.h.oldbucketmask()
 			b = (*bmap)(add(h.oldbuckets, oldbucket*uintptr(t.bucketsize)))
-			if !evacuated(b) {
+			if !evacuated(b) { // 桶中的数据还未迁移
 				checkBucket = bucket
 			} else {
 				b = (*bmap)(add(it.buckets, bucket*uintptr(t.bucketsize)))
@@ -1143,24 +1167,28 @@ next:
 			b = (*bmap)(add(it.buckets, bucket*uintptr(t.bucketsize)))
 			checkBucket = noCheck
 		}
+		// 移动到下一个桶
 		bucket++
-		if bucket == bucketShift(it.B) {
+		if bucket == bucketShift(it.B) { // 已经到达最后一个桶了
 			bucket = 0
-			it.wrapped = true
+			it.wrapped = true // 标记，用于指标下一次迭代就是重新开始了
 		}
 		i = 0
 	}
-	for ; i < bucketCnt; i++ {
+	for ; i < bucketCnt; i++ { // 迭代桶中的元素
 		offi := (i + it.offset) & (bucketCnt - 1)
-		if isEmpty(b.tophash[offi]) || b.tophash[offi] == evacuatedEmpty {
+		if isEmpty(b.tophash[offi]) || b.tophash[offi] == evacuatedEmpty { // 如果是空桶，或者桶中的无素已经迁移，跳过
 			// TODO: emptyRest is hard to use here, as we start iterating
 			// in the middle of a bucket. It's feasible, just tricky.
+		    // TODO: 当我们开始在存储桶中间进行迭代时，emptyRest很难用。这是可行的，只是棘手。
 			continue
 		}
+		// 找key
 		k := add(unsafe.Pointer(b), dataOffset+uintptr(offi)*uintptr(t.keysize))
 		if t.indirectkey() {
 			k = *((*unsafe.Pointer)(k))
 		}
+		// 找elem
 		e := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+uintptr(offi)*uintptr(t.elemsize))
 		if checkBucket != noCheck && !h.sameSizeGrow() {
 			// Special case: iterator was started during a grow to a larger size
@@ -1170,9 +1198,14 @@ next:
 			// through the oldbucket, skipping any keys that will go
 			// to the other new bucket (each oldbucket expands to two
 			// buckets during a grow).
+			// 特殊情况：迭代器是在增长到更大的大小期间启动的，尚未完成增长。
+			// 我们正在处理尚未迁移oldbucket的存储桶。至少，当我们启动存储桶时，它并没有被迁移。
+			// 因此，我们正在遍历oldbucket，跳过将要转到另一个新bucket的所有key
+			// （在增长过程中，每个oldbucket会扩展为两个bucket）。
 			if t.reflexivekey() || t.key.equal(k, k) {
 				// If the item in the oldbucket is not destined for
 				// the current new bucket in the iteration, skip it.
+				// 如果oldbucket中的条目不是发往迭代中的当前新bucket，请跳过它。
 				hash := t.hasher(k, uintptr(h.hash0))
 				if hash&bucketMask(it.B) != checkBucket {
 					continue
@@ -1185,17 +1218,25 @@ next:
 				// NOTE: this case is why we need two evacuate tophash
 				// values, evacuatedX and evacuatedY, that differ in
 				// their low bit.
+				// 如果k！= k（NaNs），则哈希不可重复。我们需要对迁移期间发送NaN的方向进行可重复且随机的选择。
+				// 我们将使用低位的Tophash来决定NaN的走法。
+                // 注意：这种情况就是为什么我们需要两个迁移值，即evacuatedX和evacuatedY，它们的低位不同。
 				if checkBucket>>(it.B-1) != uintptr(b.tophash[offi]&1) {
 					continue
 				}
 			}
 		}
+		// 无素没有被迁移
 		if (b.tophash[offi] != evacuatedX && b.tophash[offi] != evacuatedY) ||
 			!(t.reflexivekey() || t.key.equal(k, k)) {
 			// This is the golden data, we can return it.
 			// OR
 			// key!=key, so the entry can't be deleted or updated, so we can just return it.
 			// That's lucky for us because when key!=key we can't look it up successfully.
+			// 这是黄金数据（golden data），我们可以将其返回。
+            // 要么
+            // key!= key，因此无法删除或更新该条目，因此我们可以将其返回。
+            // 这对我们来说是幸运的，因为当key!= key时，我们无法成功查找它。
 			it.key = k
 			if t.indirectelem() {
 				e = *((*unsafe.Pointer)(e))
@@ -1209,22 +1250,27 @@ next:
 			// has been deleted, updated, or deleted and reinserted.
 			// NOTE: we need to regrab the key as it has potentially been
 			// updated to an equal() but not identical key (e.g. +0.0 vs -0.0).
+			// 自从启动迭代器以来，哈希表已经增长。该key的黄金数据现在位于其他位置。
+			// 检查当前哈希表中的数据。此代码处理key已被删除，更新，或删除并重新插入的情况。
+            // 注意：我们需要重新注册key，因为它可能已更新为equal()，但key不相同（例如+0.0 vs -0.0）。
 			rk, re := mapaccessK(t, h, k)
 			if rk == nil {
-				continue // key has been deleted
+				continue // key has been deleted // key已被删除
 			}
+			// 记录key、elem
 			it.key = rk
 			it.elem = re
 		}
 		it.bucket = bucket
+		// 避免不必要的写屏障
 		if it.bptr != b { // avoid unnecessary write barrier; see issue 14921
 			it.bptr = b
 		}
-		it.i = i + 1
+		it.i = i + 1 // 移动到桶的下一个位置
 		it.checkBucket = checkBucket
 		return
 	}
-	b = b.overflow(t)
+	b = b.overflow(t) // 找溢出桶，重新开始处理
 	i = 0
 	goto next
 }
