@@ -460,8 +460,8 @@ func makemap64(t *maptype, hint int64, h *hmap) *hmap {
 // make(map[k]v, hint) when hint is known to be at most bucketCnt
 // at compile time and the map needs to be allocated on the heap.
 /**
- * 当在编译时已知hint最多为bucketCnt并且需要在堆上分配映射时。
- * makemap_small实现了make(map[k]v)和make(map[k]v, hint)的Go映射创建，
+ * 当在编译时已知hint最多为bucketCnt并且需要在堆上分配映射时，
+ * makemap_small实现了make(map[k]v)和make(map[k]v, hint)的Go映射创建。
  * @param
  * @return
  **/
