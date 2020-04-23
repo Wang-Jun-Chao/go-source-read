@@ -4,12 +4,11 @@ import "fmt"
 
 func main() {
 	type P struct {
-		Age [16]int
+		Age  [16]int
+		Male byte
 	}
 
-	var a = make(map[P]int, 17)
-
-	a[P{}] = 9999999
+	var a = make(map[P]int, 16)
 
 	for i := 0; i < 16; i++ {
 		p := P{}
