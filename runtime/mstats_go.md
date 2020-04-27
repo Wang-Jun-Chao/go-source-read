@@ -190,6 +190,8 @@ type mstats struct {
 	// GC. After mark termination, heap_live == heap_marked, but
 	// unlike heap_live, heap_marked does not change until the
 	// next mark termination.
+    // heap_marked是前一个GC标记的字节数。标记终止后，heap_live == heap_marked，
+    // 但是与heap_live不同，heap_marked直到下一个标记终止才更改。
 	heap_marked uint64
 }
 
