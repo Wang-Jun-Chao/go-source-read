@@ -169,6 +169,7 @@ havespan:
 }
 
 // Return span from an mcache.
+// 从mcache返回跨度。
 func (c *mcentral) uncacheSpan(s *mspan) {
 	if s.allocCount == 0 {
 		throw("uncaching span but s.allocCount == 0")
@@ -189,6 +190,7 @@ func (c *mcentral) uncacheSpan(s *mspan) {
 		atomic.Store(&s.sweepgen, sg-1)
 	} else {
 		// Indicate that s is no longer cached.
+        // 表示s不再被缓存。
 		atomic.Store(&s.sweepgen, sg)
 	}
 
@@ -198,6 +200,8 @@ func (c *mcentral) uncacheSpan(s *mspan) {
 		// were going to be allocated. Adjust for any that
 		// weren't. We must do this before potentially
 		// sweeping the span.
+        // cacheSpan更新了alloc，假设s上的所有对象都将被分配。
+		// 调整任何不是的。我们必须在可能扫描跨度之前执行此操作。
 		atomic.Xadd64(&c.nmalloc, -int64(n))
 
 		lock(&c.lock)
@@ -211,6 +215,9 @@ func (c *mcentral) uncacheSpan(s *mspan) {
 			// heap_live was totally recomputed since
 			// caching this span, so we don't do this for
 			// stale spans.
+            // mCentral_CacheSpan保守地计算了heap_live中的未分配插槽。取消这个。
+            //
+            //如果此跨度是在清除之前缓存的，则自从缓存此跨度以来，heap_live已被完全重新计算，因此对于陈旧的跨度，我们不这样做。
 			atomic.Xadd64(&memstats.heap_live, -int64(n)*int64(s.elemsize))
 		}
 		unlock(&c.lock)
@@ -219,6 +226,7 @@ func (c *mcentral) uncacheSpan(s *mspan) {
 	if stale {
 		// Now that s is in the right mcentral list, we can
 		// sweep it.
+        // 现在s在正确的mcentral列表中，我们可以对其进行扫描。
 		s.sweep(false)
 	}
 }
@@ -231,6 +239,10 @@ func (c *mcentral) uncacheSpan(s *mspan) {
 // freeSpan reports whether s was returned to the heap.
 // If preserve=true, it does not move s (the caller
 // must take care of it).
+// freeSpan在清除s之后更新c和s。
+// 将s的swapgen设置为最新一代，然后根据s中空闲对象的数量将s移至c的适当列表或将其返回到堆。
+// freeSpan报告s是否返回到堆。
+// 如果preserve = true，则不会移动s（调用者必须小心处理它）。
 func (c *mcentral) freeSpan(s *mspan, preserve bool, wasempty bool) bool {
 	if sg := mheap_.sweepgen; s.sweepgen == sg+1 || s.sweepgen == sg+3 {
 		throw("freeSpan given cached span")
@@ -240,6 +252,7 @@ func (c *mcentral) freeSpan(s *mspan, preserve bool, wasempty bool) bool {
 	if preserve {
 		// preserve is set only when called from (un)cacheSpan above,
 		// the span must be in the empty list.
+        // 仅当从上面的(un)cacheSpan调用时设置一次save，该跨度必须在空列表中。
 		if !s.inList() {
 			throw("can't preserve unlinked span")
 		}
@@ -250,6 +263,7 @@ func (c *mcentral) freeSpan(s *mspan, preserve bool, wasempty bool) bool {
 	lock(&c.lock)
 
 	// Move to nonempty if necessary.
+    // 如有必要，请移至非空。
 	if wasempty {
 		c.empty.remove(s)
 		c.nonempty.insert(s)
@@ -259,6 +273,8 @@ func (c *mcentral) freeSpan(s *mspan, preserve bool, wasempty bool) bool {
 	// the span may be used in an mcache, so it must come after the
 	// linked list operations above (actually, just after the
 	// lock of c above.)
+    // 延迟更新scangen直到此处。这是表明跨度可能在mcache中使用的信号，
+    // 因此跨度必须在上面的链表操作之后（实际上，恰好在上面的c锁之后）。
 	atomic.Store(&s.sweepgen, mheap_.sweepgen)
 
 	if s.allocCount != 0 {
@@ -273,6 +289,7 @@ func (c *mcentral) freeSpan(s *mspan, preserve bool, wasempty bool) bool {
 }
 
 // grow allocates a new empty span from the heap and initializes it for c's size class.
+// grow从堆中分配一个新的空跨度，并将其初始化为c的size类。
 func (c *mcentral) grow() *mspan {
 	npages := uintptr(class_to_allocnpages[c.spanclass.sizeclass()])
 	size := uintptr(class_to_size[c.spanclass.sizeclass()])
@@ -284,6 +301,8 @@ func (c *mcentral) grow() *mspan {
 
 	// Use division by multiplication and shifts to quickly compute:
 	// n := (npages << _PageShift) / size
+    // 使用乘除法和移位来快速计算：
+    // n：=(npages << _PageShift) / size
 	n := (npages << _PageShift) >> s.divShift * uintptr(s.divMul) >> s.divShift2
 	s.limit = s.base() + size*n
 	heapBitsForAddr(s.base()).initSpan(s)
