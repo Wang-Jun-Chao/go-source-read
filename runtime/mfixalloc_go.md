@@ -35,7 +35,7 @@ import "unsafe"
 // 考虑标记fixalloc的类型go:notinheap。
 type fixalloc struct {
 	size   uintptr
-	first  func(arg, p unsafe.Pointer) // called first time p is returned
+	first  func(arg, p unsafe.Pointer) // called first time p is returned // 首次分配内存时调用
 	arg    unsafe.Pointer
 	list   *mlink
 	chunk  uintptr // use uintptr instead of unsafe.Pointer to avoid write barriers // 使用uintptr而不是unsafe.Pointer来避免写屏障
@@ -80,7 +80,8 @@ func (f *fixalloc) alloc() unsafe.Pointer {
 		print("runtime: use of FixAlloc_Alloc before FixAlloc_Init\n")
 		throw("runtime: internal error")
 	}
-
+    
+    // list不为空就取list作为开始地址进行内存分配
 	if f.list != nil {
 		v := unsafe.Pointer(f.list)
 		f.list = f.list.next
