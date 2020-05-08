@@ -386,6 +386,7 @@ type heapArena struct {
 
 // arenaHint is a hint for where to grow the heap arenas. See
 // mheap_.arenaHints.
+// arenaHint是有关在哪里扩展堆竞技场的hint。请参阅mheap_.arenaHints。
 //
 //go:notinheap
 type arenaHint struct {
@@ -429,16 +430,37 @@ type arenaHint struct {
 // before depending on other fields. This allows the garbage collector
 // to safely deal with potentially invalid pointers, since resolving
 // such pointers may race with a span being allocated.
+//
+// mspan是一系列页面。
+//
+// 当mspan处于堆中free strap状态时，state == mSpanFree和heapmap（s-> start）== span，heapmap（s-> start + s-> npages-1）== span。
+// 如果mspan在堆中free strap状态则除了上述 scavenged == true外。在所有其他情况下scavenged == false。
+//
+// 分配了mspan后，对所有s->start <= i < s->start + s->npages，有：state == mSpanInUse或mSpanManual和heapmap(i) == span
+//
+// 每个mspan都在一个双向链接列表中，要么在mheap的繁忙列表中，要么在mcentral的span列表中
+//
+// 表示实际内存的mspan的状态为mSpanInUse，mSpanManual或mSpanFree。这些状态之间的转换受以下约束：
+//
+// *在任何GC阶段，跨度可能会从免费变为使用中或手动。
+//
+// *在清除期间（gcphase == _GCoff），跨度可能从使用中转换为空闲（作为清除的结果），或者从手动过渡到释放（由于堆栈的释放）。
+//
+// *在GC（gcphase != _GCoff）期间，跨度*绝不能*从手动或使用中过渡到空闲。因为并发GC可能会读取一个指针然后查找其跨度，所以跨度状态必须是单调的。
+//
+// 必须原子地完成将mspan.state设置为mSpanInUse或mSpanManual的操作，并且必须在所有其他span字段均有效之后才能进行。
+// 同样，如果检查范围取决于mSpanInUse，则应原子地加载状态并在检查其他字段之前检查状态。这使垃圾回收器可以安全地处理潜在的无效指针，因为解析此类指针可能会与分配的跨度竞争。
 type mSpanState uint8
 
 const (
 	mSpanDead   mSpanState = iota
-	mSpanInUse             // allocated for garbage collected heap
-	mSpanManual            // allocated for manual management (e.g., stack allocator)
+	mSpanInUse             // allocated for garbage collected heap // 分配给垃圾收集堆
+	mSpanManual            // allocated for manual management (e.g., stack allocator) // 分配用于手动管理（例如，堆栈分配器）
 )
 
 // mSpanStateNames are the names of the span states, indexed by
 // mSpanState.
+// mSpanStateNames是跨度状态的名称，由mSpanState索引。
 var mSpanStateNames = []string{
 	"mSpanDead",
 	"mSpanInUse",
@@ -449,6 +471,7 @@ var mSpanStateNames = []string{
 // mSpanStateBox holds an mSpanState and provides atomic operations on
 // it. This is a separate type to disallow accidental comparison or
 // assignment with mSpanState.
+// mSpanStateBox拥有一个mSpanState并对其提供原子操作。这是一个单独的类型，以防止意外地与mSpanState进行比较或分配。
 type mSpanStateBox struct {
 	s mSpanState
 }
@@ -461,8 +484,8 @@ func (b *mSpanStateBox) get() mSpanState {
 	return mSpanState(atomic.Load8((*uint8)(&b.s)))
 }
 
-// mSpanList heads a linked list of spans.
-//
+/// mSpanList heads a linked list of spans.
+/// mSpanList表示跨度的链接列表。
 //go:notinheap
 type mSpanList struct {
 	first *mspan // first span in list, or nil if none
