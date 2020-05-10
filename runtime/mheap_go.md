@@ -359,7 +359,7 @@ type heapArena struct {
     //
     // 在标记期间自动完成写入。读取是非原子且无锁的，因为它们仅在扫描期间发生（因此从不与写入竞争）。
     //
-    // 这用于快速查找可以释放的整个范围。
+    // 这用于快速查找可以释放的整个跨度。
     //
     // TODO（austin）：如果这是uint64可以进行更快的扫描，那很好，但是我们没有64位原子位操作。
 	pageMarks [pagesPerArena / 8]uint8
@@ -449,7 +449,7 @@ type arenaHint struct {
 // *在GC（gcphase != _GCoff）期间，跨度*绝不能*从手动或使用中过渡到空闲。因为并发GC可能会读取一个指针然后查找其跨度，所以跨度状态必须是单调的。
 //
 // 必须原子地完成将mspan.state设置为mSpanInUse或mSpanManual的操作，并且必须在所有其他span字段均有效之后才能进行。
-// 同样，如果检查范围取决于mSpanInUse，则应原子地加载状态并在检查其他字段之前检查状态。这使垃圾回收器可以安全地处理潜在的无效指针，因为解析此类指针可能会与分配的跨度竞争。
+// 同样，如果检查跨度取决于mSpanInUse，则应原子地加载状态并在检查其他字段之前检查状态。这使垃圾回收器可以安全地处理潜在的无效指针，因为解析此类指针可能会与分配的跨度竞争。
 type mSpanState uint8
 
 const (
@@ -498,10 +498,10 @@ type mspan struct {
 	prev *mspan     // previous span in list, or nil if none
 	list *mSpanList // For debugging. TODO: Remove.
 
-	startAddr uintptr // address of first byte of span aka s.base()
-	npages    uintptr // number of pages in span
+	startAddr uintptr // address of first byte of span aka s.base() // span的第一个字节的地址，也称为s.base()
+	npages    uintptr // number of pages in span 跨度的页数
 
-	manualFreeList gclinkptr // list of free objects in mSpanManual spans
+	manualFreeList gclinkptr // list of free objects in mSpanManual spans // mSpanManual跨度中的空闲对象列表
 
 	// freeindex is the slot index between 0 and nelems at which to begin scanning
 	// for the next free object in this span.
@@ -518,10 +518,21 @@ type mspan struct {
 	// undefined and should never be referenced.
 	//
 	// Object n starts at address n*elemsize + (start << pageShift).
+	//
+	// freeindex是介于0和nelem之间的槽位索引，从该位置开始扫描此跨度中的下一个空闲对象。
+    // 每个分配都扫描从freeindex开始的allocBits，直到遇到表示空闲对象的0。 然后对freeindex进行调整，以使后续扫描刚开始经过新发现的空闲对象。
+    //
+    // 如果freeindex == nelem，则此跨度没有空闲对象。
+    //
+    // allocBits是此跨度内对象的位图。
+    // 如果n >= freeindex并且allocBits[n/8] & (1<<(n%8))为0，则对象n为空闲； 否则，分配对象n。 从nelem开始的位是未定义的，永远不要被引用。
+    //
+    // 对象n从地址 n*elemsize + (start << pageShift)开始。
 	freeindex uintptr
 	// TODO: Look up nelems from sizeclass and remove this field if it
 	// helps performance.
-	nelems uintptr // number of object in the span.
+	// TODO: 从sizeclass中查找nelems，并在有助于提高性能的情况下删除此字段。
+	nelems uintptr // number of object in the span. // 跨度中的对象数。
 
 	// Cache of the allocBits at freeindex. allocCache is shifted
 	// such that the lowest bit corresponds to the bit freeindex.
@@ -529,6 +540,10 @@ type mspan struct {
 	// ctz (count trailing zero) to use it directly.
 	// allocCache may contain bits beyond s.nelems; the caller must ignore
 	// these.
+	//
+	// 在freeindex处缓存allocBits。 移位allocCache使得最低位对应于空闲索引位。
+	// allocCache保留allocBits的补数，从而允许ctz（计数尾随零）直接使用它。
+	// allocCache可能包含s.nelems以外的位； 呼叫者必须忽略这些。
 	allocCache uint64
 
 	// allocBits and gcmarkBits hold pointers to a span's mark and
@@ -553,6 +568,19 @@ type mspan struct {
 	// The sweep will free the old allocBits and set allocBits to the
 	// gcmarkBits. The gcmarkBits are replaced with a fresh zeroed
 	// out memory.
+	//
+	// allocBits和gcmarkBits保存指向跨度标记和分配位的指针。指针是8字节对齐的。
+    // 保留了三个数据的竞技场。
+    // free：不再访问且可以重用的肮脏竞技场。
+    // next：保存要在下一个GC周期中使用的信息。
+    // current：此GC周期中正在使用的信息。
+    // previous：上一个GC周期中正在使用的信息。
+    // 一个新的GC周期从对finishsweep_m的调用开始。
+    // finishsweep_m将previous竞技场移至free竞技场，将current的竞技场移至previous的竞技场，并将next竞技场移至current竞技场。
+    // 将next竞技场填充为跨度请求内存，以保存下一个GC周期的gcmarkBits以及新分配的跨度的allocBits。
+    //
+    // 指针算术是“手动”完成的，而不是使用数组来避免沿关键性能路径进行边界检查。
+    // 扫描将释放旧的allocBits，并将allocBits设置为gcmarkBits。 gcmarkBits被替换为新的清零内存。
 	allocBits  *gcBits
 	gcmarkBits *gcBits
 
@@ -563,6 +591,14 @@ type mspan struct {
 	// if sweepgen == h->sweepgen + 1, the span was cached before sweep began and is still cached, and needs sweeping
 	// if sweepgen == h->sweepgen + 3, the span was swept and then cached and is still cached
 	// h->sweepgen is incremented by 2 after every GC
+	//
+	// 扫描生成：
+    // 如果sweepgen == h->sweepgen-2，则需要扫描
+    // 如果sweepgen == h->sweepgen-1，则正在扫描当前跨度
+    // 如果sweepgen == h->sweepgen，则扫描并准备使用
+    // 如果sweepgen == h->sweepgen + 1，则扫描在扫描开始之前已被缓存，并且仍然被缓存，需要进行扫描
+    // 如果sweepgen == h->sweepgen + 3，则扫掠跨度，然后将其缓存并仍然缓存
+    // 每个GC之后，h->sweepgen将增加2
 
 	sweepgen    uint32
 	divMul      uint16        // for divide by elemsize - divMagic.mul
