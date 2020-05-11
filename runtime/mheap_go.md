@@ -601,24 +601,26 @@ type mspan struct {
     // 每个GC之后，h->sweepgen将增加2
 
 	sweepgen    uint32
-	divMul      uint16        // for divide by elemsize - divMagic.mul
-	baseMask    uint16        // if non-0, elemsize is a power of 2, & this will get object allocation base
-	allocCount  uint16        // number of allocated objects
-	spanclass   spanClass     // size class and noscan (uint8)
-	state       mSpanStateBox // mSpanInUse etc; accessed atomically (get/set methods)
-	needzero    uint8         // needs to be zeroed before allocation
-	divShift    uint8         // for divide by elemsize - divMagic.shift
-	divShift2   uint8         // for divide by elemsize - divMagic.shift2
-	elemsize    uintptr       // computed from sizeclass or from npages
-	limit       uintptr       // end of data in span
-	speciallock mutex         // guards specials list
-	specials    *special      // linked list of special records sorted by offset.
+	divMul      uint16        // for divide by elemsize - divMagic.mul // 除以elemsize-divMagic.mul
+	baseMask    uint16        // if non-0, elemsize is a power of 2, & this will get object allocation base // 如果非零，则elemsize是2的幂，这将获得对象分配的基址
+	allocCount  uint16        // number of allocated objects // 分配的对象数
+	spanclass   spanClass     // size class and noscan (uint8) // 大小类别和noscan（uint8）
+	state       mSpanStateBox // mSpanInUse etc; accessed atomically (get/set methods) // mSpanInUse等；原子访问（获取/设置方法）
+	needzero    uint8         // needs to be zeroed before allocation // 分配前需要清零
+	divShift    uint8         // for divide by elemsize - divMagic.shift // 除以elemsize-divMagic.shift
+	divShift2   uint8         // for divide by elemsize - divMagic.shift2 // 除以elemsize-divMagic.shift2
+	elemsize    uintptr       // computed from sizeclass or from npages // 从sizeclass或npages计算
+	limit       uintptr       // end of data in span // 跨度中的结尾数据
+	speciallock mutex         // guards specials list // 保护special列表
+	specials    *special      // linked list of special records sorted by offset. // 记录special的链接列表，按偏移量排序。
 }
 
+// 计算跨度的基址
 func (s *mspan) base() uintptr {
 	return s.startAddr
 }
 
+// 计算跨度的底层信息，返回元素大小，可容纳的元素数，跨度总字节数
 func (s *mspan) layout() (size, n, total uintptr) {
 	total = s.npages << _PageShift
 	size = s.elemsize
@@ -638,13 +640,20 @@ func (s *mspan) layout() (size, n, total uintptr) {
 // indirect call from the fixalloc initializer, the compiler can't see
 // this.
 //
+// recordspan将新分配的跨度添加到h.allspans。
+//
+// 仅在第一次从mheap.spanalloc中分配跨度时才会发生这种情况（当重新使用跨度时不会调用它）。
+//
+// 这里不允许写障碍，因为在分配新的工作缓冲区时可以从gcWork调用它。
+// 但是，由于它是来自fixalloc初始化程序的间接调用，因此编译器看不到这一点。
+//
 //go:nowritebarrierrec
 func recordspan(vh unsafe.Pointer, p unsafe.Pointer) {
 	h := (*mheap)(vh)
 	s := (*mspan)(p)
 	if len(h.allspans) >= cap(h.allspans) {
-		n := 64 * 1024 / sys.PtrSize
-		if n < cap(h.allspans)*3/2 {
+		n := 64 * 1024 / sys.PtrSize // 默认：32位，64位机器： 64*1024/(4|8) = 16384|8196
+		if n < cap(h.allspans)*3/2 { // 增长量小于伴，默认就是增长一半
 			n = cap(h.allspans) * 3 / 2
 		}
 		var new []*mspan
@@ -655,12 +664,12 @@ func recordspan(vh unsafe.Pointer, p unsafe.Pointer) {
 		}
 		sp.len = len(h.allspans)
 		sp.cap = n
-		if len(h.allspans) > 0 {
+		if len(h.allspans) > 0 { // 拷贝数据
 			copy(new, h.allspans)
 		}
 		oldAllspans := h.allspans
 		*(*notInHeapSlice)(unsafe.Pointer(&h.allspans)) = *(*notInHeapSlice)(unsafe.Pointer(&new))
-		if len(oldAllspans) != 0 {
+		if len(oldAllspans) != 0 { // 释放旧数据内存
 			sysFree(unsafe.Pointer(&oldAllspans[0]), uintptr(cap(oldAllspans))*unsafe.Sizeof(oldAllspans[0]), &memstats.other_sys)
 		}
 	}
