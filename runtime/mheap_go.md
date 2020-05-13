@@ -1515,6 +1515,7 @@ func (h *mheap) allocSpan(npages uintptr, manual bool, spanclass spanClass, sysS
 HaveSpan:
 	// At this point, both s != nil and base != 0, and the heap
 	// lock is no longer held. Initialize the span.
+	// 此时，s != nil并且base != 0，并且不再持有堆锁。初始化跨度。
 	s.init(base, npages)
 	if h.allocNeedsZero(base, npages) {
 		s.needzero = 1
@@ -1525,11 +1526,13 @@ HaveSpan:
 		s.nelems = 0
 		s.limit = s.base() + s.npages*pageSize
 		// Manually managed memory doesn't count toward heap_sys.
+		// 手动管理的内存不计入heap_sys。
 		mSysStatDec(&memstats.heap_sys, s.npages*pageSize)
 		s.state.set(mSpanManual)
 	} else {
 		// We must set span properties before the span is published anywhere
 		// since we're not holding the heap lock.
+		// 由于未持有堆锁，因此必须在将跨度发布到任何地方之前设置跨度属性。
 		s.spanclass = spanclass
 		if sizeclass := spanclass.sizeclass(); sizeclass == 0 {
 			s.elemsize = nbytes
@@ -1551,14 +1554,17 @@ HaveSpan:
 		}
 
 		// Initialize mark and allocation structures.
+		// 初始化标记和分配结构。
 		s.freeindex = 0
-		s.allocCache = ^uint64(0) // all 1s indicating all free.
+		s.allocCache = ^uint64(0) // all 1s indicating all free. // 所有1表示全部空闲。
 		s.gcmarkBits = newMarkBits(s.nelems)
 		s.allocBits = newAllocBits(s.nelems)
 
 		// It's safe to access h.sweepgen without the heap lock because it's
 		// only ever updated with the world stopped and we run on the
 		// systemstack which blocks a STW transition.
+		// 在没有堆锁的情况下访问h.sweepgen是安全的，因为只有在全局停机的情况下才进行更新，
+		// 并且我们在阻止STW转换的系统堆栈上运行。
 		atomic.Store(&s.sweepgen, h.sweepgen)
 
 		// Now that the span is filled in, set its state. This
@@ -1571,26 +1577,37 @@ HaveSpan:
 		// setting the state after the span is fully
 		// initialized, and atomically checking the state in
 		// any situation where a pointer is suspect.
+		// 现在跨度已填充，其状态已设置。这是跨度中其他字段的发布障碍。
+		// 尽管在返回该跨度之前，将永远不会看到进入该跨度的有效指针，
+		// 但是，如果垃圾收集器发现了无效的指针，则对该范围的访问可能会与该范围的初始化竞争。
+		// 我们通过在完全初始化跨度之后自动设置状态，并在任何可疑指针的情况下自动检查状态，
+		// 来解决此竞争。
 		s.state.set(mSpanInUse)
 	}
 
 	// Commit and account for any scavenged memory that the span now owns.
+	// 提交并考虑跨度现在拥有的所有清理内存。
 	if scav != 0 {
 		// sysUsed all the pages that are actually available
 		// in the span since some of them might be scavenged.
+		// sysUsed 跨度中实际可用的所有页面，因为其中的某些页面可能会被清除。
 		sysUsed(unsafe.Pointer(base), nbytes)
 		mSysStatDec(&memstats.heap_released, scav)
 	}
 	// Update stats.
+	// 更新统计
 	mSysStatInc(sysStat, nbytes)
 	mSysStatDec(&memstats.heap_idle, nbytes)
 
 	// Publish the span in various locations.
+	// 在不同位置发布跨度。
 
 	// This is safe to call without the lock held because the slots
 	// related to this span will only every be read or modified by
 	// this thread until pointers into the span are published or
 	// pageInUse is updated.
+	// 这是安全的，无需持有锁定，因为与此跨度相关的插槽将仅由该线程读取或修改，
+	// 直到该跨度的指针被发布或pageInUse被更新为止。
 	h.setSpans(s.base(), npages, s)
 
 	if !manual {
@@ -1600,6 +1617,11 @@ HaveSpan:
 		//
 		// h.sweepgen is guaranteed to only change during STW,
 		// and preemption is disabled in the page allocator.
+		// 添加到已清除的使用中列表。
+        //
+        // 这会将跨度发布到根标记。
+        //
+        // 确保h.sweepgen仅在STW期间更改，并且在页面分配器中禁用了抢占。
 		h.sweepSpans[h.sweepgen/2%2].push(s)
 
 		// Mark in-use span in arena page bitmap.
@@ -1607,10 +1629,14 @@ HaveSpan:
 		// This publishes the span to the page sweeper, so
 		// it's imperative that the span be completely initialized
 		// prior to this line.
+		// 在竞技场页面位图中标记使用范围。
+        //
+        // 这会将范围发布到页面清除程序，因此必须在此行之前完全初始化跨度。
 		arena, pageIdx, pageMask := pageIndexOf(s.base())
 		atomic.Or8(&arena.pageInUse[pageIdx], pageMask)
 
 		// Update related page sweeper stats.
+		// 更新相关的页面清除器统计信息。
 		atomic.Xadd64(&h.pagesInUse, int64(npages))
 
 		if trace.enabled {
