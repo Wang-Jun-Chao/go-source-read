@@ -683,16 +683,23 @@ func recordspan(vh unsafe.Pointer, p unsafe.Pointer) {
 // noscan spanClass contains only noscan objects, which do not contain
 // pointers and thus do not need to be scanned by the garbage
 // collector.
+//
+// spanClass表示跨度的大小类别和无扫描跨度。
+//
+// 每个大小类都有一个noscan spanClass 和一个scan spanClass。
+// noscan spanClass仅包含noscan对象，该对象不包含指针，因此不需要由垃圾收集器进行扫描。
 type spanClass uint8
 
 const (
-	numSpanClasses = _NumSizeClasses << 1
-	tinySpanClass  = spanClass(tinySizeClass<<1 | 1)
+	numSpanClasses = _NumSizeClasses << 1 // 跨度类别数目
+	tinySpanClass  = spanClass(tinySizeClass<<1 | 1) //
 )
 
+// 最低位表示是否需要扫描
 func makeSpanClass(sizeclass uint8, noscan bool) spanClass {
 	return spanClass(sizeclass<<1) | spanClass(bool2int(noscan))
 }
+
 
 func (sc spanClass) sizeclass() int8 {
 	return int8(sc >> 1)
@@ -713,6 +720,13 @@ func (sc spanClass) noscan() bool {
 // It is nosplit because it's called by spanOf and several other
 // nosplit functions.
 //
+// arenaIndex将索引返回mheap_.arenas中包含p元数据的arena。
+// 该索引将L1映射中的索引和L2映射中的索引组合在一起，应用作mheap_.arenas[ai.l1()] [ai.l2()]。
+//
+// 如果p在有效堆地址范围之外，则l1()或l2()都将超出范围。
+//
+// 它是nosplit的，因为它是由spanOf和其他几个nosplit函数调用的。
+//
 //go:nosplit
 func arenaIndex(p uintptr) arenaIdx {
 	return arenaIdx((p + arenaBaseOffset) / heapArenaBytes)
@@ -720,6 +734,7 @@ func arenaIndex(p uintptr) arenaIdx {
 
 // arenaBase returns the low address of the region covered by heap
 // arena i.
+// arenaBase返回堆i覆盖的arena区域的低地址。
 func arenaBase(i arenaIdx) uintptr {
 	return uintptr(i)*heapArenaBytes - arenaBaseOffset
 }
@@ -730,6 +745,7 @@ func (i arenaIdx) l1() uint {
 	if arenaL1Bits == 0 {
 		// Let the compiler optimize this away if there's no
 		// L1 map.
+		// 如果没有L1映射，让编译器对其进行优化。
 		return 0
 	} else {
 		return uint(i) >> arenaL1Shift
@@ -747,6 +763,10 @@ func (i arenaIdx) l2() uint {
 // inheap reports whether b is a pointer into a (potentially dead) heap object.
 // It returns false for pointers into mSpanManual spans.
 // Non-preemptible because it is used by write barriers.
+//
+// inheap报告b是否是指向（可能已死）堆对象的指针。
+// 对于指向mSpanManual跨度的指针，它返回false。
+// 不可抢占，因为它被写屏障使用。
 //go:nowritebarrier
 //go:nosplit
 func inheap(b uintptr) bool {
@@ -755,7 +775,7 @@ func inheap(b uintptr) bool {
 
 // inHeapOrStack is a variant of inheap that returns true for pointers
 // into any allocated heap span.
-//
+// inHeapOrStack是inheap的一种变体，对于指向任何已分配堆范围的指针，它返回true。
 //go:nowritebarrier
 //go:nosplit
 func inHeapOrStack(b uintptr) bool {
@@ -781,6 +801,12 @@ func inHeapOrStack(b uintptr) bool {
 //
 // Must be nosplit because it has callers that are nosplit.
 //
+// spanOf返回p的跨度。如果p没有指向堆arena或没有任何span包含p，则spanOf返回nil。
+//
+// 如果p没有指向分配的内存，则可能会返回一个非零跨度，该跨度*不*包含p。如果可能，调用者应调用spanOfHeap或显式检查跨度边界。
+//
+// 必须是nosplit的，因为它具有nosplit的调用方。
+//
 //go:nosplit
 func spanOf(p uintptr) *mspan {
 	// This function looks big, but we use a lot of constant
@@ -791,17 +817,19 @@ func spanOf(p uintptr) *mspan {
 	ri := arenaIndex(p)
 	if arenaL1Bits == 0 {
 		// If there's no L1, then ri.l1() can't be out of bounds but ri.l2() can.
+		// 如果没有L1，则ri.l1()不能超出范围，但ri.l2()可以。
 		if ri.l2() >= uint(len(mheap_.arenas[0])) {
 			return nil
 		}
 	} else {
 		// If there's an L1, then ri.l1() can be out of bounds but ri.l2() can't.
+		// 如果没有L1，则ri.l1()不能超出范围，但ri.l2()可以。
 		if ri.l1() >= uint(len(mheap_.arenas)) {
 			return nil
 		}
 	}
 	l2 := mheap_.arenas[ri.l1()]
-	if arenaL1Bits != 0 && l2 == nil { // Should never happen if there's no L1.
+	if arenaL1Bits != 0 && l2 == nil { // Should never happen if there's no L1. // 如果没有L1，则永远不会发生。
 		return nil
 	}
 	ha := l2[ri.l2()]
@@ -816,6 +844,10 @@ func spanOf(p uintptr) *mspan {
 //
 // Must be nosplit because it has callers that are nosplit.
 //
+// spanOfUnchecked等效于spanOf，但是调用者必须确保p指向分配的堆空间。
+//
+// 必须是nosplit的，因为它具有nosplit的调用方。
+//
 //go:nosplit
 func spanOfUnchecked(p uintptr) *mspan {
 	ai := arenaIndex(p)
@@ -827,6 +859,9 @@ func spanOfUnchecked(p uintptr) *mspan {
 //
 // Must be nosplit because it has callers that are nosplit.
 //
+// spanOfHeap类似于spanOf，但如果p没有指向堆对象，则返回nil。
+// 必须是nosplit的，因为它具有nosplit的调用方。
+//
 //go:nosplit
 func spanOfHeap(p uintptr) *mspan {
 	s := spanOf(p)
@@ -835,6 +870,8 @@ func spanOfHeap(p uintptr) *mspan {
 	// have to synchronize with span initialization. Then, it's
 	// still possible we picked up a stale span pointer, so we
 	// have to check the span's bounds.
+	// 如果从未分配过，则s为零。否则，我们将首先检查其状态，因为我们不信任该指针，因此必须与跨度初始化进行同步。
+	// 然后，仍然有可能我们选择了一个过时的跨度指针，因此我们必须检查跨度的范围。
 	if s == nil || s.state.get() != mSpanInUse || p < s.base() || p >= s.limit {
 		return nil
 	}
@@ -843,6 +880,7 @@ func spanOfHeap(p uintptr) *mspan {
 
 // pageIndexOf returns the arena, page index, and page mask for pointer p.
 // The caller must ensure p is in the heap.
+// pageIndexOf返回指针p的heapArena，pageIdx和pageMask。调用者必须确保p在堆中。
 func pageIndexOf(p uintptr) (arena *heapArena, pageIdx uintptr, pageMask uint8) {
 	ai := arenaIndex(p)
 	arena = mheap_.arenas[ai.l1()][ai.l2()]
@@ -852,6 +890,7 @@ func pageIndexOf(p uintptr) (arena *heapArena, pageIdx uintptr, pageMask uint8) 
 }
 
 // Initialize the heap.
+// 堆初始化
 func (h *mheap) init() {
 	h.spanalloc.init(unsafe.Sizeof(mspan{}), recordspan, unsafe.Pointer(h), &memstats.mspan_sys)
 	h.cachealloc.init(unsafe.Sizeof(mcache{}), nil, nil, &memstats.mcache_sys)
@@ -866,14 +905,22 @@ func (h *mheap) init() {
 	// from improperly cas'ing it from 0.
 	//
 	// This is safe because mspan contains no heap pointers.
+	//
+	//不要将mspan分配设为零。后台扫描可以同时检查跨度和分配跨度，
+	// 因此跨度的spangen在释放和重新分配跨度时必须幸存，
+	// 以防止后台扫描将其不正确地从0设置为空，这一点很重要。
+    //
+    // 这是安全的，因为mspan不包含堆指针。
 	h.spanalloc.zero = false
 
-	// h->mapcache needs no init
+	// h->mapcache needs no init // h->mapcache不初需要初始化
 
+    // 初始化中央列表
 	for i := range h.central {
 		h.central[i].mcentral.init(spanClass(i))
 	}
 
+    // 进行页初始化
 	h.pages.init(&h.lock, &memstats.gc_sys)
 }
 
@@ -883,6 +930,13 @@ func (h *mheap) init() {
 // reclaim implements the page-reclaimer half of the sweeper.
 //
 // h must NOT be locked.
+//
+// reclaim扫描并将至少npage页回收到堆中。
+// 在分配npage页之前调用以保证增长检查。
+//
+// reclaim实现清半扫描的页面回收器。
+//
+// h不能被锁定。
 func (h *mheap) reclaim(npage uintptr) {
 	// This scans pagesPerChunk at a time. Higher values reduce
 	// contention on h.reclaimPos, but increase the minimum
@@ -900,9 +954,20 @@ func (h *mheap) reclaim(npage uintptr) {
 	// locking/unlocking the heap (even with low contention). We
 	// could make the slow path here several times faster by
 	// batching heap frees.
+	//
+	// 一次扫描pagesPerChunk。较高的值会减少h.reclaimPos上的争用，但会增加执行回收的最小延迟。
+    //
+    // 必须是pageInUse位图元素大小的倍数。
+    //
+    // 实际需要多少时间取决于实际释放的跨度。实验上，它可以在2.6GHz Core i7上以〜300GB/ms的速度扫描页面，
+    // 但只能以〜32MB/ms的速度扫描跨度。使用512页限制了大约100µs的时间。
+    //
+    // TODO（austin）：释放跨度所花费的时间的一半是锁定/解锁堆（即使争用程度较低）。
+    // 通过批量释放堆，我们可以使慢速路径快几倍。
 	const pagesPerChunk = 512
 
 	// Bail early if there's no more reclaim work.
+	// 如果没有其他回收工作，请尽早保释。
 	if atomic.Load64(&h.reclaimIndex) >= 1<<63 {
 		return
 	}
@@ -910,6 +975,7 @@ func (h *mheap) reclaim(npage uintptr) {
 	// Disable preemption so the GC can't start while we're
 	// sweeping, so we can read h.sweepArenas, and so
 	// traceGCSweepStart/Done pair on the P.
+	// 禁用抢占，以便在扫描时无法启动GC，因此我们可以读取h.sweepArenas，并在P上执行traceGCSweepStart/Done组合。
 	mp := acquirem()
 
 	if trace.enabled {
@@ -920,10 +986,11 @@ func (h *mheap) reclaim(npage uintptr) {
 	locked := false
 	for npage > 0 {
 		// Pull from accumulated credit first.
+		// 首先从累积的信用中提取。
 		if credit := atomic.Loaduintptr(&h.reclaimCredit); credit > 0 {
 			take := credit
 			if take > npage {
-				// Take only what we need.
+				// Take only what we need. // 仅获取我们需要的内容。
 				take = npage
 			}
 			if atomic.Casuintptr(&h.reclaimCredit, credit, credit-take) {
@@ -932,38 +999,38 @@ func (h *mheap) reclaim(npage uintptr) {
 			continue
 		}
 
-		// Claim a chunk of work.
+		// Claim a chunk of work. // 要求大量工作。
 		idx := uintptr(atomic.Xadd64(&h.reclaimIndex, pagesPerChunk) - pagesPerChunk)
 		if idx/pagesPerArena >= uintptr(len(arenas)) {
-			// Page reclaiming is done.
+			// Page reclaiming is done. // 页面回收已完成。
 			atomic.Store64(&h.reclaimIndex, 1<<63)
 			break
 		}
 
 		if !locked {
-			// Lock the heap for reclaimChunk.
+			// Lock the heap for reclaimChunk. // 锁定堆以进行回收。
 			lock(&h.lock)
 			locked = true
 		}
 
-		// Scan this chunk.
+		// Scan this chunk. // 扫描此块。
 		nfound := h.reclaimChunk(arenas, idx, pagesPerChunk)
 		if nfound <= npage {
 			npage -= nfound
-		} else {
-			// Put spare pages toward global credit.
+		} else { // 回收的页面数比npage多，多的页面放到全局使用
+			// Put spare pages toward global credit. // 将备用页面用于全局信用。
 			atomic.Xadduintptr(&h.reclaimCredit, nfound-npage)
 			npage = 0
 		}
 	}
-	if locked {
+	if locked { // 解锁
 		unlock(&h.lock)
 	}
 
 	if trace.enabled {
 		traceGCSweepDone()
 	}
-	releasem(mp)
+	releasem(mp) // 释放当前的m
 }
 
 // reclaimChunk sweeps unmarked spans that start at page indexes [pageIdx, pageIdx+n).
@@ -972,12 +1039,20 @@ func (h *mheap) reclaim(npage uintptr) {
 // h.lock must be held and the caller must be non-preemptible. Note: h.lock may be
 // temporarily unlocked and re-locked in order to do sweeping or if tracing is
 // enabled.
+//
+// reclaimChunk扫描从页面索引[pageIdx，pageIdx+n)开始的未标记范围。
+// 返回返回堆的页面数。
+//
+// 必须持有h.lock，并且调用者必须不可抢占。注意：h.lock可能会暂时解锁并重新锁定，以便进行扫描或启用了跟踪。
 func (h *mheap) reclaimChunk(arenas []arenaIdx, pageIdx, n uintptr) uintptr {
 	// The heap lock must be held because this accesses the
 	// heapArena.spans arrays using potentially non-live pointers.
 	// In particular, if a span were freed and merged concurrently
 	// with this probing heapArena.spans, it would be possible to
 	// observe arbitrary, stale span pointers.
+	//
+	// 必须持有堆的锁，因为这会使用潜在的非活动指针访问heapArena.spans数组。
+    // 尤其是，如果释放了一个跨度并与此探测heapArena.spans并发合并，则可以观察到任意的，陈旧的范围指针。
 	n0 := n
 	var nFreed uintptr
 	sg := h.sweepgen
@@ -985,7 +1060,7 @@ func (h *mheap) reclaimChunk(arenas []arenaIdx, pageIdx, n uintptr) uintptr {
 		ai := arenas[pageIdx/pagesPerArena]
 		ha := h.arenas[ai.l1()][ai.l2()]
 
-		// Get a chunk of the bitmap to work on.
+		// Get a chunk of the bitmap to work on. // 获取一部分位图以进行处理。
 		arenaPage := uint(pageIdx % pagesPerArena)
 		inUse := ha.pageInUse[arenaPage/8:]
 		marked := ha.pageMarks[arenaPage/8:]
@@ -997,8 +1072,8 @@ func (h *mheap) reclaimChunk(arenas []arenaIdx, pageIdx, n uintptr) uintptr {
 		// Scan this bitmap chunk for spans that are in-use
 		// but have no marked objects on them.
 		for i := range inUse {
-			inUseUnmarked := atomic.Load8(&inUse[i]) &^ marked[i]
-			if inUseUnmarked == 0 {
+			inUseUnmarked := atomic.Load8(&inUse[i]) &^ marked[i] // 这个值是最初记录
+			if inUseUnmarked == 0 { // 表示整个堆竞技场没有被使用
 				continue
 			}
 
@@ -1008,21 +1083,23 @@ func (h *mheap) reclaimChunk(arenas []arenaIdx, pageIdx, n uintptr) uintptr {
 					if atomic.Load(&s.sweepgen) == sg-2 && atomic.Cas(&s.sweepgen, sg-2, sg-1) {
 						npages := s.npages
 						unlock(&h.lock)
-						if s.sweep(false) {
-							nFreed += npages
+						if s.sweep(false) { // 进行扫描
+							nFreed += npages // 扫描成功增加计数
 						}
 						lock(&h.lock)
 						// Reload inUse. It's possible nearby
 						// spans were freed when we dropped the
 						// lock and we don't want to get stale
 						// pointers from the spans array.
+						// 重新加载inUse。当我们放开锁并且我们不想从spans数组中获取过时的指针时，可能释放了附近的span。
+						// NOTE: 如果inUse[i]和marked[i]值相同，&^操作后，inUseUnmarked会变为0
 						inUseUnmarked = atomic.Load8(&inUse[i]) &^ marked[i]
 					}
 				}
 			}
 		}
 
-		// Advance.
+		// Advance. // 每次前进8
 		pageIdx += uintptr(len(inUse) * 8)
 		n -= uintptr(len(inUse) * 8)
 	}
@@ -1040,22 +1117,30 @@ func (h *mheap) reclaimChunk(arenas []arenaIdx, pageIdx, n uintptr) uintptr {
 // spanclass indicates the span's size class and scannability.
 //
 // If needzero is true, the memory for the returned span will be zeroed.
+//
+// alloc从GC的堆中分配新的npage页跨度。
+// spanclass指示跨度的大小类别和可扫描性。
+// 如果needzero为true，则返回跨度的内存将清零。
 func (h *mheap) alloc(npages uintptr, spanclass spanClass, needzero bool) *mspan {
 	// Don't do any operations that lock the heap on the G stack.
 	// It might trigger stack growth, and the stack growth code needs
 	// to be able to allocate heap.
+	//
+	// 不要执行任何将堆锁定在G堆栈上的操作。
+    // 它可能会触发堆栈增长，并且堆栈增长代码需要能够分配堆。
 	var s *mspan
 	systemstack(func() {
 		// To prevent excessive heap growth, before allocating n pages
 		// we need to sweep and reclaim at least n pages.
+		// 为了防止堆过度增长，在分配n页之前，我们需要清除并回收至少n页。
 		if h.sweepdone == 0 {
-			h.reclaim(npages)
+			h.reclaim(npages) // 释放页
 		}
-		s = h.allocSpan(npages, false, spanclass, &memstats.heap_inuse)
+		s = h.allocSpan(npages, false, spanclass, &memstats.heap_inuse) // 分配置跨度
 	})
 
 	if s != nil {
-		if needzero && s.needzero != 0 {
+		if needzero && s.needzero != 0 { // 需要清零
 			memclrNoHeapPointers(unsafe.Pointer(s.base()), s.npages<<_PageShift)
 		}
 		s.needzero = 0
@@ -1076,6 +1161,14 @@ func (h *mheap) alloc(npages uintptr, spanclass spanClass, needzero bool) *mspan
 // allocManual must be called on the system stack because it may
 // acquire the heap lock via allocSpan. See mheap for details.
 //
+// allocManual分配npage页的手动管理范围。
+// 如果分配失败，则allocManual返回nil。
+//
+// allocManual用于将字节添加到*stat中，该字节应该是memstats使用中的字段。与GC堆中的分配不同，该分配*不*计入heap_inuse或heap_sys。
+//
+// 如果设置了span.needzero，则支持返回的跨度内存可能不会为零。
+//
+// 必须在系统堆栈上调用allocManual，因为它可能通过allocSpan获取堆锁。有关详细信息，请参见mheap。
 //go:systemstack
 func (h *mheap) allocManual(npages uintptr, stat *uint64) *mspan {
 	return h.allocSpan(npages, true, 0, stat)
@@ -1083,6 +1176,7 @@ func (h *mheap) allocManual(npages uintptr, stat *uint64) *mspan {
 
 // setSpans modifies the span map so [spanOf(base), spanOf(base+npage*pageSize))
 // is s.
+// setSpans修改跨度映射，因此[spanOf(base)，spanOf(base+npage*pageSize))为s。
 func (h *mheap) setSpans(base, npage uintptr, s *mspan) {
 	p := base / pageSize
 	ai := arenaIndex(base)
@@ -1107,6 +1201,13 @@ func (h *mheap) setSpans(base, npage uintptr, s *mspan) {
 // critical for future page allocations.
 //
 // There are no locking constraints on this method.
+//
+// allocNeedsZero检查假定已分配的地址空间[base，base+npage*pageSize)的区域是否需要清零，更新堆舞台元数据以供将来分配。
+//
+// 每次从堆分配页面时，都必须调用此方法，即使页面分配器可以以其他方式证明其分配的内存已经为零，因为它们是从操作系统中获取的。
+// 它将更新对于将来页面分配至关重要的heapArena元数据。
+//
+// 此方法没有锁定约束。
 func (h *mheap) allocNeedsZero(base, npage uintptr) (needZero bool) {
 	for npage > 0 {
 		ai := arenaIndex(base)
@@ -1123,37 +1224,50 @@ func (h *mheap) allocNeedsZero(base, npage uintptr) (needZero bool) {
 			//
 			// We still need to update zeroedBase for this arena, and
 			// potentially more arenas.
+			//
+			// 我们扩展到了竞技场的非清零部分，因此在使用之前需要将该区域清零。
+            //
+            // zeroedBase正在单调增加，因此，如果现在看到此信息，则可以确定需要将该内存区域清零。
+            //
+            // 我们仍然需要为此竞技场以及可能更多的竞技场更新zeroedBase。
 			needZero = true
 		}
 		// We may observe arenaBase > zeroedBase if we're racing with one or more
 		// allocations which are acquiring memory directly before us in the address
 		// space. But, because we know no one else is acquiring *this* memory, it's
 		// still safe to not zero.
+		//
+		// 在我们进入地址空间之前，如果我们正在与一个或多个分配直接竞争获得内存的分配，我们可能会观察到arenaBase> zeroedBase。
+		// 但是，因为我们知道没有其他人正在获取此内存，所以不为零仍然是安全的。
 
 		// Compute how far into the arena we extend into, capped
 		// at heapArenaBytes.
+		// 计算我们延伸到竞技场的距离，以heapArenaBytes为上限。
 		arenaLimit := arenaBase + npage*pageSize
 		if arenaLimit > heapArenaBytes {
 			arenaLimit = heapArenaBytes
 		}
 		// Increase ha.zeroedBase so it's >= arenaLimit.
 		// We may be racing with other updates.
+		//增加ha.zeroedBase，使其 >= arenaLimit。我们可能正在与其他更新竞争。
 		for arenaLimit > zeroedBase {
 			if atomic.Casuintptr(&ha.zeroedBase, zeroedBase, arenaLimit) {
 				break
 			}
 			zeroedBase = atomic.Loaduintptr(&ha.zeroedBase)
-			// Sanity check zeroedBase.
+			// Sanity check zeroedBase. // 健全性检查zeroedBase。
 			if zeroedBase <= arenaLimit && zeroedBase > arenaBase {
 				// The zeroedBase moved into the space we were trying to
 				// claim. That's very bad, and indicates someone allocated
 				// the same region we did.
+				// zeroedBase移入了我们试图声明的空间。这很糟糕，表示有人分配了与我们相同的区域。
 				throw("potentially overlapping in-use allocations detected")
 			}
 		}
 
 		// Move base forward and subtract from npage to move into
 		// the next arena, or finish.
+		//向前移动base并从npage减去值以进入下一个区域，或结束。
 		base += arenaLimit - arenaBase
 		npage -= (arenaLimit - arenaBase) / pageSize
 	}
@@ -1171,15 +1285,23 @@ func (h *mheap) allocNeedsZero(base, npage uintptr) (needZero bool) {
 // the only place it is used now. In the future, this requirement
 // may be relaxed if its use is necessary elsewhere.
 //
+// tryAllocMSpan尝试从P本地缓存分配mspan对象，但可能会失败。
+//
+// h不需要锁定。
+//
+// 此调用者必须确保在此函数期间，其P不会在其下方更改。当前，为了确保我们强制该功能在系统堆栈上运行，因为这是现在唯一使用它的地方。
+// 将来，如果有必要在其他地方使用它，则可以放宽此要求。
 //go:systemstack
 func (h *mheap) tryAllocMSpan() *mspan {
 	pp := getg().m.p.ptr()
 	// If we don't have a p or the cache is empty, we can't do
 	// anything here.
+	// 如果我们没有p或缓存为空，那么我们将无法在此处执行任何操作。
 	if pp == nil || pp.mspancache.len == 0 {
 		return nil
 	}
 	// Pull off the last entry in the cache.
+	// 提取缓存中的最后一个条目。
 	s := pp.mspancache.buf[pp.mspancache.len-1]
 	pp.mspancache.len--
 	return s
@@ -1194,14 +1316,22 @@ func (h *mheap) tryAllocMSpan() *mspan {
 // Running on the system stack also ensures that we won't
 // switch Ps during this function. See tryAllocMSpan for details.
 //
+// allocMSpanLocked分配一个mspan对象。
+//
+// h必须被锁定。
+//
+// 必须在系统堆栈上调用allocMSpanLocked，因为它的调用方持有堆锁。有关详细信息，请参见mheap。
+// 在系统堆栈上运行还可以确保我们在此功能期间不会切换Ps。有关详细信息，请参见tryAllocMSpan。
 //go:systemstack
 func (h *mheap) allocMSpanLocked() *mspan {
 	pp := getg().m.p.ptr()
 	if pp == nil {
 		// We don't have a p so just do the normal thing.
+		// 我们没有p，因此只需执行正常操作即可。
 		return (*mspan)(h.spanalloc.alloc())
 	}
 	// Refill the cache if necessary.
+	// 如有必要，请重新填充缓存。填充一半
 	if pp.mspancache.len == 0 {
 		const refillCount = len(pp.mspancache.buf) / 2
 		for i := 0; i < refillCount; i++ {
@@ -1210,6 +1340,7 @@ func (h *mheap) allocMSpanLocked() *mspan {
 		pp.mspancache.len = refillCount
 	}
 	// Pull off the last entry in the cache.
+	// 提取缓存中的最后一个条目。做为结果返回
 	s := pp.mspancache.buf[pp.mspancache.len-1]
 	pp.mspancache.len--
 	return s
@@ -1224,10 +1355,17 @@ func (h *mheap) allocMSpanLocked() *mspan {
 // Running on the system stack also ensures that we won't
 // switch Ps during this function. See tryAllocMSpan for details.
 //
+// freeMSpanLocked释放mspan对象。
+//
+// h必须被锁定。
+//
+// 必须在系统堆栈上调用freeMSpanLocked，因为其调用方拥有堆锁。有关详细信息，请参见mheap。
+// 在系统堆栈上运行还可以确保我们在此功能期间不会切换Ps。有关详细信息，请参见tryAllocMSpan。
 //go:systemstack
 func (h *mheap) freeMSpanLocked(s *mspan) {
 	pp := getg().m.p.ptr()
 	// First try to free the mspan directly to the cache.
+	// 首先尝试将mspan直接释放到缓存中。
 	if pp != nil && pp.mspancache.len < len(pp.mspancache.buf) {
 		pp.mspancache.buf[pp.mspancache.len] = s
 		pp.mspancache.len++
@@ -1235,6 +1373,7 @@ func (h *mheap) freeMSpanLocked(s *mspan) {
 	}
 	// Failing that (or if we don't have a p), just free it to
 	// the heap.
+	// 失败（或者如果我们没有p的话），只需将其释放到堆中即可。
 	h.spanalloc.free(unsafe.Pointer(s))
 }
 
@@ -1254,18 +1393,32 @@ func (h *mheap) freeMSpanLocked(s *mspan) {
 // allocSpan must be called on the system stack both because it acquires
 // the heap lock and because it must block GC transitions.
 //
+// allocSpan分配一个拥有npages内存的mspan。
+//
+// 如果manual == false，则allocSpan分配class spanclass类别的堆跨度并更新堆记数。
+// 如果manual == true，则allocSpan分配一个手动管理的跨度（spanclass被忽略），
+// 并且调用方负责与其使用跨度有关的任何记帐。无论哪种方式，allocSpan都会自动将新分配的跨度中
+// 的字节添加到*sysStat中。
+//
+// 返回的跨度已完全初始化。
+//
+// h不能被锁定。
+//
+// 必须在系统堆栈上调用allocSpan，这是因为它获取了堆锁并且因为它必须阻止GC转换。
 //go:systemstack
 func (h *mheap) allocSpan(npages uintptr, manual bool, spanclass spanClass, sysStat *uint64) (s *mspan) {
-	// Function-global state.
+	// Function-global state. // 函数全局状态。
 	gp := getg()
 	base, scav := uintptr(0), uintptr(0)
 
 	// If the allocation is small enough, try the page cache!
+	// 如果分配足够小，请尝试页面缓存！
 	pp := gp.m.p.ptr()
 	if pp != nil && npages < pageCachePages/4 {
 		c := &pp.pcache
 
 		// If the cache is empty, refill it.
+		// 如果缓存为空，请重新填充。
 		if c.empty() {
 			lock(&h.lock)
 			*c = h.pages.allocToCache()
@@ -1273,6 +1426,7 @@ func (h *mheap) allocSpan(npages uintptr, manual bool, spanclass spanClass, sysS
 		}
 
 		// Try to allocate from the cache.
+		// 尝试从缓存中分配。
 		base, scav = c.alloc(npages)
 		if base != 0 {
 			s = h.tryAllocMSpan()
@@ -1293,23 +1447,33 @@ func (h *mheap) allocSpan(npages uintptr, manual bool, spanclass spanClass, sysS
 			// it's fine for now. The critical section here is
 			// short and large object allocations are relatively
 			// infrequent.
+			//
+			// 我们正在运行GC，或者无法获得mspan，或者分配是针对大型对象的。
+			// 这意味着我们必须锁定堆并做很多额外的工作，所以走在HaveBaseLocked路径上。
+            //
+            // 我们必须在GC期间执行此操作，以免使用heap_scan产生偏差，因为只要锁定就刷新mcache统计信息。
+            //
+            // TODO（mknyszek）：如果分配量很大，不必锁定堆会很好，但是现在很不错。
+            // 这里的临界区是简短的，大型对象的分配相对较少。
 		}
 	}
 
 	// For one reason or another, we couldn't get the
 	// whole job done without the heap lock.
+	// 由于某种原因，没有堆锁就无法完成整个工作。
 	lock(&h.lock)
 
 	if base == 0 {
 		// Try to acquire a base address.
+		// 尝试获取基址。
 		base, scav = h.pages.alloc(npages)
-		if base == 0 {
+		if base == 0 { // 没有基址就尝试扩展页
 			if !h.grow(npages) {
-				unlock(&h.lock)
+				unlock(&h.lock) // 扩展失败，解锁返回nil
 				return nil
 			}
-			base, scav = h.pages.alloc(npages)
-			if base == 0 {
+			base, scav = h.pages.alloc(npages) // 再次尝试获取基址。
+			if base == 0 { // 没有就报错
 				throw("grew heap, but no adequate free space found")
 			}
 		}
@@ -1317,19 +1481,23 @@ func (h *mheap) allocSpan(npages uintptr, manual bool, spanclass spanClass, sysS
 	if s == nil {
 		// We failed to get an mspan earlier, so grab
 		// one now that we have the heap lock.
+		// 我们早期获得mspan失败，因此现在有了堆锁，现在就抓取一个作为结果。
 		s = h.allocMSpanLocked()
 	}
 	if !manual {
 		// This is a heap span, so we should do some additional accounting
 		// which may only be done with the heap locked.
+		// 这是一个堆跨度，因此我们应该做一些额外的记录，只有在锁定堆时才能完成。
 
 		// Transfer stats from mcache to global.
+		// 将统计信息从mcache传输到全局。
 		memstats.heap_scan += uint64(gp.m.mcache.local_scan)
 		gp.m.mcache.local_scan = 0
 		memstats.tinyallocs += uint64(gp.m.mcache.local_tinyallocs)
 		gp.m.mcache.local_tinyallocs = 0
 
 		// Do some additional accounting if it's a large allocation.
+		// 如果分配量很大，请执行一些其他统计。
 		if spanclass.sizeclass() == 0 {
 			mheap_.largealloc += uint64(npages * pageSize)
 			mheap_.nlargealloc++
@@ -1337,6 +1505,7 @@ func (h *mheap) allocSpan(npages uintptr, manual bool, spanclass spanClass, sysS
 		}
 
 		// Either heap_live or heap_scan could have been updated.
+		// heap_live或heap_scan可能已被更新。
 		if gcBlackenEnabled != 0 {
 			gcController.revise()
 		}
