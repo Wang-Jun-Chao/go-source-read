@@ -1651,8 +1651,12 @@ HaveSpan:
 // returning whether it worked.
 //
 // h must be locked.
+//
+// 尝试至少将npage页的内存添加到堆中，并返回其是否起作用。
+// h必须被锁定。
 func (h *mheap) grow(npage uintptr) bool {
 	// We must grow the heap in whole palloc chunks.
+	// 我们必须在整个palloc块中增加堆。
 	ask := alignUp(npage, pallocChunkPages) * pageSize
 
 	totalGrowth := uintptr(0)
@@ -1661,6 +1665,8 @@ func (h *mheap) grow(npage uintptr) bool {
 		// Not enough room in the current arena. Allocate more
 		// arena space. This may not be contiguous with the
 		// current arena, so we have to request the full ask.
+		// 当前竞技场上没有足够的空间。分配更多的竞技场空间。
+		// 这可能与当前的领域不连续有关，因此我们必须要求完整的ask内存。
 		av, asize := h.sysAlloc(ask)
 		if av == nil {
 			print("runtime: out of memory: cannot allocate ", ask, "-byte block (", memstats.heap_sys, " in use)\n")
@@ -1670,16 +1676,19 @@ func (h *mheap) grow(npage uintptr) bool {
 		if uintptr(av) == h.curArena.end {
 			// The new space is contiguous with the old
 			// space, so just extend the current space.
+			// 新空间与旧空间相邻，因此只需扩展当前空间即可。
 			h.curArena.end = uintptr(av) + asize
 		} else {
 			// The new space is discontiguous. Track what
 			// remains of the current space and switch to
 			// the new space. This should be rare.
+			// 新空间不连续。跟踪剩余的当前空间并切换到新空间。这应该很少见。
 			if size := h.curArena.end - h.curArena.base; size != 0 {
 				h.pages.grow(h.curArena.base, size)
 				totalGrowth += size
 			}
 			// Switch to the new space.
+			// 切换到新空间。
 			h.curArena.base = uintptr(av)
 			h.curArena.end = uintptr(av) + asize
 		}
@@ -1690,14 +1699,21 @@ func (h *mheap) grow(npage uintptr) bool {
 		// The allocation is always aligned to the heap arena
 		// size which is always > physPageSize, so its safe to
 		// just add directly to heap_released.
+		//
+		// 刚刚分配的内存即使没有跨度支持也算为已释放和空闲。
+        //
+        // 分配始终与的堆竞技场大小对齐，堆竞技场大小总是>physPageSize
+        // 因此可以安全地将其直接添加到heap_released中。
 		mSysStatInc(&memstats.heap_released, asize)
 		mSysStatInc(&memstats.heap_idle, asize)
 
 		// Recalculate nBase
+		// 重新计算nBase
 		nBase = alignUp(h.curArena.base+ask, physPageSize)
 	}
 
 	// Grow into the current arena.
+	// 进入当前的arena。
 	v := h.curArena.base
 	h.curArena.base = nBase
 	h.pages.grow(v, nBase-v)
@@ -1707,6 +1723,8 @@ func (h *mheap) grow(npage uintptr) bool {
 	// By scavenging inline we deal with the failure to allocate out of
 	// memory fragments by scavenging the memory fragments that are least
 	// likely to be re-used.
+	// 我们只是导致了堆的增长，因此请清除即将使用的内容。
+    // 通过清除内联，我们通过清除最可能被重用的内存片段来处理无法分配内存碎片的问题。
 	if retained := heapRetained(); retained+uint64(totalGrowth) > h.scavengeGoal {
 		todo := totalGrowth
 		if overage := uintptr(retained + uint64(totalGrowth) - h.scavengeGoal); todo > overage {
