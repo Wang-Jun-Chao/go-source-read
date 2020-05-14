@@ -1736,6 +1736,7 @@ func (h *mheap) grow(npage uintptr) bool {
 }
 
 // Free the span back into the heap.
+// 将跨度释放回堆中。
 func (h *mheap) freeSpan(s *mspan) {
 	systemstack(func() {
 		mp := getg().m
@@ -1746,12 +1747,14 @@ func (h *mheap) freeSpan(s *mspan) {
 		mp.mcache.local_tinyallocs = 0
 		if msanenabled {
 			// Tell msan that this entire span is no longer in use.
+			// 告诉msan这整个跨度已不再使用。
 			base := unsafe.Pointer(s.base())
 			bytes := s.npages << _PageShift
 			msanfree(base, bytes)
 		}
 		if gcBlackenEnabled != 0 {
 			// heap_scan changed.
+			// heap_scan已更改。
 			gcController.revise()
 		}
 		h.freeSpanLocked(s, true, true)
@@ -1768,6 +1771,12 @@ func (h *mheap) freeSpan(s *mspan) {
 //
 // freeManual must be called on the system stack because it acquires
 // the heap lock. See mheap for details.
+//
+// freeManual释放由allocManual返回的手动管理跨度。stat必须与传递给分配s的allocManual的stat相同。
+//
+// 仅当gcphase == _GCoff时才必须调用此函数。有关说明，请参见mSpanState。
+//
+// 必须在系统堆栈上调用freeManual，因为它获取了堆锁。有关详细信息，请参见mheap。
 //
 //go:systemstack
 func (h *mheap) freeManual(s *mspan, stat *uint64) {
@@ -1793,6 +1802,7 @@ func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool) {
 		atomic.Xadd64(&h.pagesInUse, -int64(s.npages))
 
 		// Clear in-use bit in arena page bitmap.
+		// 清除arena页面位图中的使用中的位标记。
 		arena, pageIdx, pageMask := pageIndexOf(s.base())
 		atomic.And8(&arena.pageInUse[pageIdx], ^pageMask)
 	default:
@@ -1807,9 +1817,11 @@ func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool) {
 	}
 
 	// Mark the space as free.
+	//将空间标记为空闲。
 	h.pages.free(s.base(), s.npages)
 
 	// Free the span structure. We no longer have a use for it.
+	// 释放跨度结构。我们不再使用它。
 	s.state.set(mSpanDead)
 	h.freeMSpanLocked(s)
 }
@@ -1817,14 +1829,18 @@ func (h *mheap) freeSpanLocked(s *mspan, acctinuse, acctidle bool) {
 // scavengeAll visits each node in the free treap and scavenges the
 // treapNode's span. It then removes the scavenged span from
 // unscav and adds it into scav before continuing.
+// scavengeAll访问空闲treap中的每个节点并清除treapNode的跨度。
+// 然后，它从unscav中删除清除的跨度，然后将其添加到scav中，然后再继续。
 func (h *mheap) scavengeAll() {
 	// Disallow malloc or panic while holding the heap lock. We do
 	// this here because this is a non-mallocgc entry-point to
 	// the mheap API.
+	// 持有堆锁时禁止malloc或panic。我们在这里这样做是因为这是mheap API的非mallocgc入口点。
 	gp := getg()
 	gp.m.mallocing++
 	lock(&h.lock)
 	// Reset the scavenger address so we have access to the whole heap.
+	// 重置清除程序地址，以便我们可以访问整个堆。
 	h.pages.resetScavengeAddr()
 	released := h.pages.scavenge(^uintptr(0), true)
 	unlock(&h.lock)
@@ -1842,6 +1858,7 @@ func runtime_debug_freeOSMemory() {
 }
 
 // Initialize a new span with the given start and npages.
+// 使用给定的start和npage初始化一个新的跨度。
 func (span *mspan) init(base uintptr, npages uintptr) {
 	// span is *not* zeroed.
 	span.next = nil
@@ -1866,6 +1883,7 @@ func (span *mspan) inList() bool {
 }
 
 // Initialize an empty doubly-linked list.
+// 初始化一个空的双向链接列表
 func (list *mSpanList) init() {
 	list.first = nil
 	list.last = nil
@@ -1914,6 +1932,7 @@ func (list *mSpanList) insert(span *mspan) {
 	span.list = list
 }
 
+// 插入到最后
 func (list *mSpanList) insertBack(span *mspan) {
 	if span.next != nil || span.prev != nil || span.list != nil {
 		println("runtime: failed mSpanList.insertBack", span, span.next, span.prev, span.list)
@@ -1933,21 +1952,25 @@ func (list *mSpanList) insertBack(span *mspan) {
 
 // takeAll removes all spans from other and inserts them at the front
 // of list.
+// takeAll从所有其他跨度中删除所有跨度并将其插入列表的开头。
 func (list *mSpanList) takeAll(other *mSpanList) {
 	if other.isEmpty() {
 		return
 	}
 
 	// Reparent everything in other to list.
+	// 将其他所有内容都列出来。
 	for s := other.first; s != nil; s = s.next {
 		s.list = list
 	}
 
 	// Concatenate the lists.
+	// 连接列表。
 	if list.isEmpty() {
 		*list = *other
 	} else {
 		// Neither list is empty. Put other before list.
+		//两个列表都不为空。将other放在list前。
 		other.last.next = list.first
 		list.first.prev = other.last
 		list.first = other.first
@@ -1963,13 +1986,15 @@ const (
 	// an object, a finalizer special will cause the freeing operation
 	// to abort, and we want to keep the other special records around
 	// if that happens.
+	// 注意：finalizer special必须是第一个，因为如果我们要释放对象，则finalizer special将导致释放操作中止，
+	// 并且如果发生这种情况，我们希望保留其他特殊记录。
 )
 
 //go:notinheap
 type special struct {
-	next   *special // linked list in span
-	offset uint16   // span offset of object
-	kind   byte     // kind of special
+	next   *special // linked list in span // 跨度中的链表
+	offset uint16   // span offset of object // 对象的跨度偏移
+	kind   byte     // kind of special // special类型
 }
 
 // Adds the special record s to the list of special records for
