@@ -2003,6 +2003,9 @@ type special struct {
 // Returns true if the special was successfully added, false otherwise.
 // (The add will fail only if a record with the same p and s->kind
 //  already exists.)
+// 将特殊记录s添加到对象p的特殊记录列表中。 s的所有字段都应填写，但offset和next除外，此例程将填写该字段。
+// 如果成功添加特殊项，则返回true，否则返回false。
+// （仅当存在具有相同p和s-> kind的记录时，添加操作才会失败。）
 func addspecial(p unsafe.Pointer, s *special) bool {
 	span := spanOfHeap(uintptr(p))
 	if span == nil {
@@ -2012,6 +2015,8 @@ func addspecial(p unsafe.Pointer, s *special) bool {
 	// Ensure that the span is swept.
 	// Sweeping accesses the specials list w/o locks, so we have
 	// to synchronize with it. And it's just much safer.
+	// 确保跨度已被扫描了。
+    // 扫描访问不带锁的特列表列表w/o锁，因此我们必须与其同步。而且更加安全。
 	mp := acquirem()
 	span.ensureSwept()
 
@@ -2021,6 +2026,7 @@ func addspecial(p unsafe.Pointer, s *special) bool {
 	lock(&span.speciallock)
 
 	// Find splice point, check for existing record.
+	// 找到接合点，检查现有记录。
 	t := &span.specials
 	for {
 		x := *t
@@ -2030,7 +2036,7 @@ func addspecial(p unsafe.Pointer, s *special) bool {
 		if offset == uintptr(x.offset) && kind == x.kind {
 			unlock(&span.speciallock)
 			releasem(mp)
-			return false // already exists
+			return false // already exists // 已存在
 		}
 		if offset < uintptr(x.offset) || (offset == uintptr(x.offset) && kind < x.kind) {
 			break
@@ -2039,6 +2045,7 @@ func addspecial(p unsafe.Pointer, s *special) bool {
 	}
 
 	// Splice in record, fill in offset.
+	// 拼接记录，填写偏移量。
 	s.offset = uint16(offset)
 	s.next = *t
 	*t = s
@@ -2051,6 +2058,9 @@ func addspecial(p unsafe.Pointer, s *special) bool {
 // Removes the Special record of the given kind for the object p.
 // Returns the record if the record existed, nil otherwise.
 // The caller must FixAlloc_Free the result.
+// 删除对象p的给定种类的特殊记录。
+// 如果记录存在，则返回记录，否则返回nil。
+// 调用者必须FixAlloc_Free结果。
 func removespecial(p unsafe.Pointer, kind uint8) *special {
 	span := spanOfHeap(uintptr(p))
 	if span == nil {
@@ -2060,6 +2070,8 @@ func removespecial(p unsafe.Pointer, kind uint8) *special {
 	// Ensure that the span is swept.
 	// Sweeping accesses the specials list w/o locks, so we have
 	// to synchronize with it. And it's just much safer.
+	// 确保跨度已被扫描了。
+    // 扫描访问不带锁的特列表列表w/o锁，因此我们必须与其同步。而且更加安全。
 	mp := acquirem()
 	span.ensureSwept()
 
@@ -2074,6 +2086,7 @@ func removespecial(p unsafe.Pointer, kind uint8) *special {
 		}
 		// This function is used for finalizers only, so we don't check for
 		// "interior" specials (p must be exactly equal to s->offset).
+		// 此函数仅用于finalizer，因此我们不检查“interior” special（p必须完全等于s-> offset）。
 		if offset == uintptr(s.offset) && kind == s.kind {
 			*t = s.next
 			unlock(&span.speciallock)
@@ -2092,16 +2105,21 @@ func removespecial(p unsafe.Pointer, kind uint8) *special {
 // specialfinalizer is allocated from non-GC'd memory, so any heap
 // pointers must be specially handled.
 //
+// 所描述的对象为有一组finalizer。
+//
+// specialfinalizer是从非GC的内存中分配的，因此必须对任何堆指针进行特殊处理。
+//
 //go:notinheap
 type specialfinalizer struct {
 	special special
-	fn      *funcval // May be a heap pointer.
+	fn      *funcval // May be a heap pointer. // 可能是堆指针
 	nret    uintptr
-	fint    *_type   // May be a heap pointer, but always live.
-	ot      *ptrtype // May be a heap pointer, but always live.
+	fint    *_type   // May be a heap pointer, but always live. // 可能是堆指针，但始终存活。
+	ot      *ptrtype // May be a heap pointer, but always live. // 可能是堆指针，但始终存活。
 }
 
 // Adds a finalizer to the object p. Returns true if it succeeded.
+// 将finalizer添加到对象p。如果成功，则返回true。
 func addfinalizer(p unsafe.Pointer, f *funcval, nret uintptr, fint *_type, ot *ptrtype) bool {
 	lock(&mheap_.speciallock)
 	s := (*specialfinalizer)(mheap_.specialfinalizeralloc.alloc())
@@ -2116,15 +2134,19 @@ func addfinalizer(p unsafe.Pointer, f *funcval, nret uintptr, fint *_type, ot *p
 		// GC-related invariants as markrootSpans in any
 		// situation where it's possible that markrootSpans
 		// has already run but mark termination hasn't yet.
+		// 在有可能markrootSpans已经运行但标记终止还没有运行的任何情况下，
+		// 它负责与markrootSpans保持相同的与GC相关的不变性。
 		if gcphase != _GCoff {
 			base, _, _ := findObject(uintptr(p), 0, 0)
 			mp := acquirem()
 			gcw := &mp.p.ptr().gcw
 			// Mark everything reachable from the object
 			// so it's retained for the finalizer.
+			// 标记对象可访问的所有内容，以便将其保留给终结器。
 			scanobject(base, gcw)
 			// Mark the finalizer itself, since the
 			// special isn't part of the GC'd heap.
+			// 标记终结器本身，因为special不是GC堆的一部分。
 			scanblock(uintptr(unsafe.Pointer(&s.fn)), sys.PtrSize, &oneptrmask[0], gcw, nil)
 			releasem(mp)
 		}
@@ -2132,6 +2154,7 @@ func addfinalizer(p unsafe.Pointer, f *funcval, nret uintptr, fint *_type, ot *p
 	}
 
 	// There was an old finalizer
+	// 有一个旧的finalizer
 	lock(&mheap_.speciallock)
 	mheap_.specialfinalizeralloc.free(unsafe.Pointer(s))
 	unlock(&mheap_.speciallock)
@@ -2139,10 +2162,11 @@ func addfinalizer(p unsafe.Pointer, f *funcval, nret uintptr, fint *_type, ot *p
 }
 
 // Removes the finalizer (if any) from the object p.
+// 从对象p中删除finalizer（如果有）。
 func removefinalizer(p unsafe.Pointer) {
 	s := (*specialfinalizer)(unsafe.Pointer(removespecial(p, _KindSpecialFinalizer)))
 	if s == nil {
-		return // there wasn't a finalizer to remove
+		return // there wasn't a finalizer to remove // 没有要删除的finalizer
 	}
 	lock(&mheap_.speciallock)
 	mheap_.specialfinalizeralloc.free(unsafe.Pointer(s))
@@ -2150,6 +2174,7 @@ func removefinalizer(p unsafe.Pointer) {
 }
 
 // The described object is being heap profiled.
+// 正在对所描述的对象进行堆分析。
 //
 //go:notinheap
 type specialprofile struct {
@@ -2158,6 +2183,7 @@ type specialprofile struct {
 }
 
 // Set the heap profile bucket associated with addr to b.
+// 将与addr关联的堆分析存储桶设置为b。
 func setprofilebucket(p unsafe.Pointer, b *bucket) {
 	lock(&mheap_.speciallock)
 	s := (*specialprofile)(mheap_.specialprofilealloc.alloc())
@@ -2171,6 +2197,7 @@ func setprofilebucket(p unsafe.Pointer, b *bucket) {
 
 // Do whatever cleanup needs to be done to deallocate s. It has
 // already been unlinked from the mspan specials list.
+// 进行清除s所需的任何清理工作。它已从mspan special列表中取消链接。
 func freespecial(s *special, p unsafe.Pointer, size uintptr) {
 	switch s.kind {
 	case _KindSpecialFinalizer:
@@ -2192,17 +2219,20 @@ func freespecial(s *special, p unsafe.Pointer, size uintptr) {
 }
 
 // gcBits is an alloc/mark bitmap. This is always used as *gcBits.
+// gcBits是一个分配/标记位图。始终用作*gcBits。
 //
 //go:notinheap
 type gcBits uint8
 
 // bytep returns a pointer to the n'th byte of b.
+// bytep返回指向b的第n个字节的指针。
 func (b *gcBits) bytep(n uintptr) *uint8 {
 	return addb((*uint8)(b), n)
 }
 
 // bitp returns a pointer to the byte containing bit n and a mask for
 // selecting that bit from *bytep.
+// bitp返回指向包含第n位的字节的指针和用于从*bytep中选择该位的掩码。
 func (b *gcBits) bitp(n uintptr) (bytep *uint8, mask uint8) {
 	return b.bytep(n / 8), 1 << (n % 8)
 }
@@ -2211,14 +2241,14 @@ const gcBitsChunkBytes = uintptr(64 << 10)
 const gcBitsHeaderBytes = unsafe.Sizeof(gcBitsHeader{})
 
 type gcBitsHeader struct {
-	free uintptr // free is the index into bits of the next free byte.
-	next uintptr // *gcBits triggers recursive type bug. (issue 14620)
+	free uintptr // free is the index into bits of the next free byte. // free是下一个空闲字节的位的索引。
+	next uintptr // *gcBits triggers recursive type bug. (issue 14620) // *gcBits触发递归类型错误。（问题14620）
 }
 
 //go:notinheap
 type gcBitsArena struct {
-	// gcBitsHeader // side step recursive type bug (issue 14620) by including fields by hand.
-	free uintptr // free is the index into bits of the next free byte; read/write atomically
+	// gcBitsHeader // side step recursive type bug (issue 14620) by including fields by hand. // 通过手动包含字段来避免递归递归类型错误（issue 14620）。
+	free uintptr // free is the index into bits of the next free byte; read/write atomically // free是下一个空闲字节的位索引；原子读/写
 	next *gcBitsArena
 	bits [gcBitsChunkBytes - gcBitsHeaderBytes]gcBits
 }
@@ -2226,34 +2256,40 @@ type gcBitsArena struct {
 var gcBitsArenas struct {
 	lock     mutex
 	free     *gcBitsArena
-	next     *gcBitsArena // Read atomically. Write atomically under lock.
+	next     *gcBitsArena // Read atomically. Write atomically under lock. // /原子读写。
 	current  *gcBitsArena
 	previous *gcBitsArena
 }
 
 // tryAlloc allocates from b or returns nil if b does not have enough room.
 // This is safe to call concurrently.
+// tryAlloc从b分配，或者如果b没有足够的空间则返回nil。
+// 这可以安全地并发调用。
 func (b *gcBitsArena) tryAlloc(bytes uintptr) *gcBits {
 	if b == nil || atomic.Loaduintptr(&b.free)+bytes > uintptr(len(b.bits)) {
 		return nil
 	}
 	// Try to allocate from this block.
+	// 尝试从该块分配。
 	end := atomic.Xadduintptr(&b.free, bytes)
 	if end > uintptr(len(b.bits)) {
 		return nil
 	}
 	// There was enough room.
+	// 有足够的空间
 	start := end - bytes
 	return &b.bits[start]
 }
 
 // newMarkBits returns a pointer to 8 byte aligned bytes
 // to be used for a span's mark bits.
+// newMarkBits返回一个指向8字节对齐字节的指针，以用于跨度的标记位。
 func newMarkBits(nelems uintptr) *gcBits {
 	blocksNeeded := uintptr((nelems + 63) / 64)
 	bytesNeeded := blocksNeeded * 8
 
 	// Try directly allocating from the current head arena.
+	// 尝试直接从当前的头部arena进行分配。
 	head := (*gcBitsArena)(atomic.Loadp(unsafe.Pointer(&gcBitsArenas.next)))
 	if p := head.tryAlloc(bytesNeeded); p != nil {
 		return p
@@ -2261,23 +2297,30 @@ func newMarkBits(nelems uintptr) *gcBits {
 
 	// There's not enough room in the head arena. We may need to
 	// allocate a new arena.
+	// 头部arena空间不足。我们可能需要分配一个新的arena。
 	lock(&gcBitsArenas.lock)
 	// Try the head arena again, since it may have changed. Now
 	// that we hold the lock, the list head can't change, but its
 	// free position still can.
+	// 再试一次头部arena，因为它可能已更改。现在，我们持有了锁，列表头无法更改，但其空闲位置仍然可以更改。
 	if p := gcBitsArenas.next.tryAlloc(bytesNeeded); p != nil {
 		unlock(&gcBitsArenas.lock)
 		return p
 	}
 
 	// Allocate a new arena. This may temporarily drop the lock.
+	// 分配一个新的arena。这可能会暂时解除锁定。
 	fresh := newArenaMayUnlock()
 	// If newArenaMayUnlock dropped the lock, another thread may
 	// have put a fresh arena on the "next" list. Try allocating
 	// from next again.
+	// 如果newArenaMayUnlock放弃了锁定，则另一个线程可能在“next”列表上添加了一个新的竞技场。
+	// 尝试再次从next分配。
 	if p := gcBitsArenas.next.tryAlloc(bytesNeeded); p != nil {
 		// Put fresh back on the free list.
 		// TODO: Mark it "already zeroed"
+		// 将fresh的内容放回空闲列表。
+        // TODO：将其标记为“已经归零”
 		fresh.next = gcBitsArenas.free
 		gcBitsArenas.free = fresh
 		unlock(&gcBitsArenas.lock)
@@ -2286,12 +2329,14 @@ func newMarkBits(nelems uintptr) *gcBits {
 
 	// Allocate from the fresh arena. We haven't linked it in yet, so
 	// this cannot race and is guaranteed to succeed.
+	// 从新的竞技场分配。我们尚未将其链接进来，因此这无法进行竞争并且可以保证成功。
 	p := fresh.tryAlloc(bytesNeeded)
 	if p == nil {
 		throw("markBits overflow")
 	}
 
 	// Add the fresh arena to the "next" list.
+	//将新的竞技场添加到“next”列表中。
 	fresh.next = gcBitsArenas.next
 	atomic.StorepNoWB(unsafe.Pointer(&gcBitsArenas.next), unsafe.Pointer(fresh))
 
