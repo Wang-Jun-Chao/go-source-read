@@ -2350,6 +2350,8 @@ func newMarkBits(nelems uintptr) *gcBits {
 // allocation bits. For spans not being initialized the
 // mark bits are repurposed as allocation bits when
 // the span is swept.
+// newAllocBits返回一个指向8个字节对齐字节的指针，该字节将用于此跨度的分配位。
+// newAllocBits用于提供新初始化的跨度分配位。对于未初始化的跨度，扫描跨度时会将标记位重新用作分配位。
 func newAllocBits(nelems uintptr) *gcBits {
 	return newMarkBits(nelems)
 }
@@ -2368,6 +2370,15 @@ func newAllocBits(nelems uintptr) *gcBits {
 // The span's sweep extinguishes all the references to gcBitsArenas.previous
 // by pointing gcAllocBits into the gcBitsArenas.current.
 // The gcBitsArenas.previous is released to the gcBitsArenas.free list.
+//
+// nextMarkBitArenaEpoch为持有标记位的竞技场建立新纪元。竞技场是相对于当前GC周期命名的，当前GC周期由对finishweep_m的调用划定。
+//
+// 已扫过所有当前跨度。
+// 在该扫描期间，每个跨度在gcBitsArenas.next块中为其gcmarkBits分配了空间。
+// gcBitsArenas.next变成gcBitsArenas.current，GC将在其中标记对象，并且在扫过每个范围后，这些位将用于分配对象。
+// gcBitsArenas.current变为gcBitsArenas.previous，在此GC周期中，跨度的gcAllocBits一直存在，直到扫过所有跨度为止。
+// 跨度扫描通过将gcAllocBits指向gcBitsArenas.current来消灭对gcBitsArenas.previous的所有引用。
+// 将gcBitsArenas.previous发布到gcBitsArenas.free列表中。
 func nextMarkBitArenaEpoch() {
 	lock(&gcBitsArenas.lock)
 	if gcBitsArenas.previous != nil {
@@ -2375,6 +2386,7 @@ func nextMarkBitArenaEpoch() {
 			gcBitsArenas.free = gcBitsArenas.previous
 		} else {
 			// Find end of previous arenas.
+			// 查找上一个竞技场的结尾。
 			last := gcBitsArenas.previous
 			for last = gcBitsArenas.previous; last.next != nil; last = last.next {
 			}
@@ -2384,12 +2396,14 @@ func nextMarkBitArenaEpoch() {
 	}
 	gcBitsArenas.previous = gcBitsArenas.current
 	gcBitsArenas.current = gcBitsArenas.next
-	atomic.StorepNoWB(unsafe.Pointer(&gcBitsArenas.next), nil) // newMarkBits calls newArena when needed
+	atomic.StorepNoWB(unsafe.Pointer(&gcBitsArenas.next), nil) // newMarkBits calls newArena when needed // newMarkBits在需要时调用newArena
 	unlock(&gcBitsArenas.lock)
 }
 
 // newArenaMayUnlock allocates and zeroes a gcBits arena.
 // The caller must hold gcBitsArena.lock. This may temporarily release it.
+// newArenaMayUnlock分配gcBits竞技场并将其清零。
+// 调用者必须持有gcBitsArena.lock。这可能会暂时释放它。
 func newArenaMayUnlock() *gcBitsArena {
 	var result *gcBitsArena
 	if gcBitsArenas.free == nil {
@@ -2407,6 +2421,7 @@ func newArenaMayUnlock() *gcBitsArena {
 	result.next = nil
 	// If result.bits is not 8 byte aligned adjust index so
 	// that &result.bits[result.free] is 8 byte aligned.
+	// 如果result.bits不是8字节对齐的调整索引，则&result.bits[result.free]是8字节对齐的。
 	if uintptr(unsafe.Offsetof(gcBitsArena{}.bits))&7 == 0 {
 		result.free = 0
 	} else {
