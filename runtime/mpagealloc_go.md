@@ -254,6 +254,19 @@ type pageAlloc struct {
 	//
 	// We may still get segmentation faults < len since some of that
 	// memory may not be committed yet.
+	//
+	// 基数摘要树。
+    //
+    // 每个切片的上限代表整个内存预留。
+    // 每个切片的len反映该级别分配器的最大已知映射堆地址。
+    //
+    // 每个摘要级别的后备存储都是在init中保留的，并且可能会（也可能不会）在grow中提交（较小的地址空间可能会在init中提交所有内存）。
+    //
+    // 保持len <= cap的目的是在片的顶端执行边界检查，以便代替未知的运行时分段错误，我们得到更友好的越界错误。
+    //
+    // 要遍历摘要级别，请使用inUse确定当前可用的范围。否则，可能会尝试访问仅保留的内存，这可能会导致严重故障。
+    //
+    // 由于某些内存可能尚未提交，因此我们仍然可能遇到分段错误<len。
 	summary [summaryLevels][]pallocSum
 
 	// chunks is a slice of bitmap chunks.
@@ -289,6 +302,30 @@ type pageAlloc struct {
 	// TODO(mknyszek): Consider changing the definition of the bitmap
 	// such that 1 means free and 0 means in-use so that summaries and
 	// the bitmaps align better on zero-values.
+	//
+	// 块是位图块的一部分。
+    //
+    // 如果扁平化，则在大多数64位平台（O（GiB）或更大）上，块的总大小相当大，因此与其使用一个大的映射（即使在PROT_NONE上也有问题，
+    // 在某些平台上还是有问题），我们使用两个级稀疏数组方法类似于mheap中的arena索引。
+    //
+    // 要查找包含内存地址“a”的块，请执行以下操作：
+    //  chunkOf（chunkIndex（a））
+    //
+    // 下表描述了运行时支持的各种heapAddrBits的块配置
+    //
+	// heapAddrBits | L1 Bits | L2 Bits | L2 Entry Size
+	// ------------------------------------------------
+	// 32           | 0       | 10      | 128 KiB
+	// 33 (iOS)     | 0       | 11      | 256 KiB
+	// 48           | 13      | 13      | 1 MiB
+	//
+	// 没有理由在32位上使用块的L1部分，地址空间很小，因此L2也很小。对于具有48位地址空间的平台，
+	// 我们选择L1使得L2的大小为1 MiB，这在低粒度之间取得了很好的平衡，而又不会对BSS造成太大影响
+	// （请注意，L1直接存储在pageAlloc中） 。
+    //
+    // 要遍历位图，请使用inUse确定当前可用的范围。否则，可能会遍历未使用的范围。
+    //
+    // TODO（mknyszek）：考虑更改位图的定义，以使1表示空闲，0表示正在使用，以便摘要和位图在零值上更好地对齐。
 	chunks [1 << pallocChunksL1Bits]*[1 << pallocChunksL2Bits]pallocData
 
 	// The address to start an allocation search with. It must never
@@ -303,21 +340,33 @@ type pageAlloc struct {
 	// Note that adding in arenaBaseOffset transforms addresses
 	// to a new address space with a linear view of the full address
 	// space on architectures with segmented address spaces.
+    //
+    // 用于开始分配搜索的地址。它绝不能指向inUse中未包含的任何内存，即inUse.contains（searchAddr）必须始终为true。
+    //
+    // 当添加了arenaBaseOffset时，我们保证分配了低于此值的所有有效堆地址（当还添加了arenaBaseOffset时），不值得搜索。
+    //
+    // 注意，在具有分段地址空间的体系结构上，在arenaBaseOffset中添加具有完整地址空间的线性视图的地址，会将地址转换为新的地址空间。
 	searchAddr uintptr
 
 	// The address to start a scavenge candidate search with. It
 	// need not point to memory contained in inUse.
+	// 用于开始搜寻候选地址的地址。它不需要指向inUse中包含的内存。
 	scavAddr uintptr
 
 	// The amount of memory scavenged since the last scavtrace print.
 	//
 	// Read and updated atomically.
+	//
+	// 自上次scavtrace打印以来清除的内存量。
+    //
+    // 原子读写。
 	scavReleased uintptr
 
 	// start and end represent the chunk indices
 	// which pageAlloc knows about. It assumes
 	// chunks in the range [start, end) are
 	// currently ready to use.
+	// 开始和结束表示pageAlloc知道的块索引。它假定[start，end）范围内的块当前准备就绪。
 	start, end chunkIdx
 
 	// inUse is a slice of ranges of address space which are
@@ -331,17 +380,28 @@ type pageAlloc struct {
 	// 1 element.
 	//
 	// All access is protected by the mheapLock.
+	//
+	// inUse是地址空间范围的一部分，页面分配器已知该地址空间当前正在使用（传递以增长）。
+    //
+    // 此字段当前在32位体系结构上未使用，但对其进行跟踪无害。在这种情况下，我们非常关心具有连续堆，
+    // 并采取其他措施来确保这一点，因此在几乎所有情况下，该堆都应该只有1个元素。
+    //
+    // 所有访问均受mheapLock保护。
 	inUse addrRanges
 
 	// mheap_.lock. This level of indirection makes it possible
 	// to test pageAlloc indepedently of the runtime allocator.
+	// // mheap_.lock。这种间接级别使独立于运行时分配器的页面Alloc测试成为可能。
 	mheapLock *mutex
 
 	// sysStat is the runtime memstat to update when new system
 	// memory is committed by the pageAlloc for allocation metadata.
+	//
+	// sysStat是pageAlloc为分配元数据提交新的系统内存时要更新的运行时memstat。
 	sysStat *uint64
 
 	// Whether or not this struct is being used in tests.
+	// 是否在测试中使用此结构。
 	test bool
 }
 
@@ -350,6 +410,8 @@ func (s *pageAlloc) init(mheapLock *mutex, sysStat *uint64) {
 		// We can't represent 1<<levelLogPages[0] pages, the maximum number
 		// of pages we need to represent at the root level, in a summary, which
 		// is a big problem. Throw.
+		// 在摘要中，我们不能表示1 << levelLogPages [0]页，这是我们需要在根级别上表示的最大页数，这是一个大问题。
+		// 抛出异常。
 		print("runtime: root level max pages = ", 1<<levelLogPages[0], "\n")
 		print("runtime: summary max pages = ", maxPackedValue, "\n")
 		throw("root level max pages doesn't fit in summary")
@@ -363,9 +425,11 @@ func (s *pageAlloc) init(mheapLock *mutex, sysStat *uint64) {
 	s.sysInit()
 
 	// Start with the searchAddr in a state indicating there's no free memory.
+	// 从状态为searchAddr开始，该状态指示没有可用内存。
 	s.searchAddr = maxSearchAddr
 
 	// Start with the scavAddr in a state indicating there's nothing more to do.
+	// 从scavAddr开始，该状态指示没有其他事情要做。
 	s.scavAddr = minScavAddr
 
 	// Set the mheapLock.
@@ -382,9 +446,19 @@ func (s *pageAlloc) init(mheapLock *mutex, sysStat *uint64) {
 // Returns < 0 if addr is less than s.searchAddr in the linearized address space.
 // Returns > 0 if addr is greater than s.searchAddr in the linearized address space.
 // Returns 0 if addr and s.searchAddr are equal.
+//
+// compareSearchAddrTo在具有不连续进程地址空间的系统上，在地址空间的线性化视图中将地址与s.searchAddr进行比较。
+// 此线性化视图与通过添加arenaBaseOffset完成的chunkIndex和arenaIndex生成的视图相同。
+//
+// 在没有不连续地址空间的系统上，这只是正常的比较。
+//
+// 如果线性化地址空间中的addr小于s.searchAddr，则返回<0。
+// 如果线性化地址空间中的addr大于s.searchAddr，则返回> 0。
+// 如果addr和s.searchAddr相等，则返回0。
 func (s *pageAlloc) compareSearchAddrTo(addr uintptr) int {
 	// Compare with arenaBaseOffset added because it gives us a linear, contiguous view
 	// of the heap on architectures with signed address spaces.
+	// 与添加arenaBaseOffset进行比较，因为它为我们提供了具有符号地址空间的体系结构上堆的线性连续视图。
 	lAddr := addr + arenaBaseOffset
 	lSearchAddr := s.searchAddr + arenaBaseOffset
 	if lAddr < lSearchAddr {
@@ -396,6 +470,7 @@ func (s *pageAlloc) compareSearchAddrTo(addr uintptr) int {
 }
 
 // chunkOf returns the chunk at the given chunk index.
+// chunkOf返回给定块索引处的块。
 func (s *pageAlloc) chunkOf(ci chunkIdx) *pallocData {
 	return &s.chunks[ci.l1()][ci.l2()]
 }
@@ -404,19 +479,26 @@ func (s *pageAlloc) chunkOf(ci chunkIdx) *pallocData {
 // It may allocate metadata, in which case *s.sysStat will be updated.
 //
 // s.mheapLock must be held.
+// grow设置了地址范围[base，base + size）的元数据。
+// 它可以分配元数据，在这种情况下* s.sysStat将被更新。
+//
+// 必须持有s.mheapLock。
 func (s *pageAlloc) grow(base, size uintptr) {
 	// Round up to chunks, since we can't deal with increments smaller
 	// than chunks. Also, sysGrow expects aligned values.
+	// 向上舍入块，因为我们无法处理小于大块的增量。此外，sysGrow期望对齐的值。
 	limit := alignUp(base+size, pallocChunkBytes)
 	base = alignDown(base, pallocChunkBytes)
 
 	// Grow the summary levels in a system-dependent manner.
 	// We just update a bunch of additional metadata here.
+	// 以系统相关的方式增加摘要级别。我们只是在这里更新了一堆其他的元数据。
 	s.sysGrow(base, limit)
 
 	// Update s.start and s.end.
 	// If no growth happened yet, start == 0. This is generally
 	// safe since the zero page is unmapped.
+	// 更新s.start和s.end。如果尚未发生增长，则start==0。这通常是安全的，因为未映射零页面。
 	firstGrowth := s.start == 0
 	start, end := chunkIndex(base), chunkIndex(limit)
 	if firstGrowth || start < s.start {
@@ -428,11 +510,14 @@ func (s *pageAlloc) grow(base, size uintptr) {
 	// Note that [base, limit) will never overlap with any existing
 	// range inUse because grow only ever adds never-used memory
 	// regions to the page allocator.
+	// 请注意，[base，limit）永远不会与inUse中的任何现有范围重叠，因为Growth仅将从未使用的内存区域添加到页面分配器中。
 	s.inUse.add(addrRange{base, limit})
 
 	// A grow operation is a lot like a free operation, so if our
 	// chunk ends up below the (linearized) s.searchAddr, update
 	// s.searchAddr to the new address, just like in free.
+	//grow操作非常类似于free操作，因此，如果我们的代码块最终位于（线性化的）s.searchAddr以下，
+	// 则将s.searchAddr更新为新地址，就像free操作一样。
 	if s.compareSearchAddrTo(base) < 0 {
 		s.searchAddr = base
 	}
@@ -442,12 +527,20 @@ func (s *pageAlloc) grow(base, size uintptr) {
 	//
 	// Newly-grown memory is always considered scavenged.
 	// Set all the bits in the scavenged bitmaps high.
+	// 如果需要，将条目添加到稀疏的块中。然后，初始化位图。
+    //
+    // 新增长的内存始终被视为清除。
+    // 将清除位图中的所有位设置为high。
 	for c := chunkIndex(base); c < chunkIndex(limit); c++ {
 		if s.chunks[c.l1()] == nil {
 			// Create the necessary l2 entry.
 			//
 			// Store it atomically to avoid races with readers which
 			// don't acquire the heap lock.
+			//
+			// 创建必要的l2条目。
+            //
+            // 以原子方式存储它，以避免与不获取堆锁的读取器发生竞争。
 			r := sysAlloc(unsafe.Sizeof(*s.chunks[0]), s.sysStat)
 			atomic.StorepNoWB(unsafe.Pointer(&s.chunks[c.l1()]), r)
 		}
@@ -457,6 +550,7 @@ func (s *pageAlloc) grow(base, size uintptr) {
 	// Update summaries accordingly. The grow acts like a free, so
 	// we need to ensure this newly-free memory is visible in the
 	// summaries.
+	// 相应地更新摘要。grow的行为类似于free，因此我们需要确保摘要中可以看到此新释放的内存。
 	s.update(base, size/pageSize, true, false)
 }
 
