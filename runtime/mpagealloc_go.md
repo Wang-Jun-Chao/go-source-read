@@ -562,15 +562,24 @@ func (s *pageAlloc) grow(base, size uintptr) {
 // whether the operation performed was an allocation or a free.
 //
 // s.mheapLock must be held.
+//
+// update更新堆元数据。每次更新位图时都必须调用它。
+//
+// 如果contig为true，则在addr和addr + npages之间存在连续分配或空闲的情况下，update会进行一些优化。 alloc指示执行的操作是分配还是空闲。
+//
+// 必须持有s.mheapLock。
 func (s *pageAlloc) update(base, npages uintptr, contig, alloc bool) {
 	// base, limit, start, and end are inclusive.
+	// base, limit, start, 和end都是包含的
 	limit := base + npages*pageSize - 1
 	sc, ec := chunkIndex(base), chunkIndex(limit)
 
 	// Handle updating the lowest level first.
+	// 首先处理最低级别的更新。
 	if sc == ec {
 		// Fast path: the allocation doesn't span more than one chunk,
 		// so update this one and if the summary didn't change, return.
+		// 快速路径：分配不会跨越一个以上的块，因此请更新该块，如果摘要未更改，则返回。
 		x := s.summary[len(s.summary)-1][sc]
 		y := s.chunkOf(sc).summarize()
 		if x == y {
@@ -580,16 +589,20 @@ func (s *pageAlloc) update(base, npages uintptr, contig, alloc bool) {
 	} else if contig {
 		// Slow contiguous path: the allocation spans more than one chunk
 		// and at least one summary is guaranteed to change.
+		// 缓慢的连续路径：分配跨越一个以上的块，并且保证至少更改一个摘要。
 		summary := s.summary[len(s.summary)-1]
 
 		// Update the summary for chunk sc.
+		// 更新块sc的摘要。
 		summary[sc] = s.chunkOf(sc).summarize()
 
 		// Update the summaries for chunks in between, which are
 		// either totally allocated or freed.
+		// 更新介于两者之间的块的摘要，这些摘要可以完全分配或释放。
 		whole := s.summary[len(s.summary)-1][sc+1 : ec]
 		if alloc {
 			// Should optimize into a memclr.
+			// 应该优化为memclr。
 			for i := range whole {
 				whole[i] = 0
 			}
@@ -600,6 +613,7 @@ func (s *pageAlloc) update(base, npages uintptr, contig, alloc bool) {
 		}
 
 		// Update the summary for chunk ec.
+		// 更新块ec的摘要。
 		summary[ec] = s.chunkOf(ec).summarize()
 	} else {
 		// Slow general path: the allocation spans more than one chunk
@@ -607,6 +621,9 @@ func (s *pageAlloc) update(base, npages uintptr, contig, alloc bool) {
 		//
 		// We can't assume a contiguous allocation happened, so walk over
 		// every chunk in the range and manually recompute the summary.
+		// 缓慢的一般路径：分配跨越一个以上的块，并且保证至少更改一个摘要。
+        //
+        // 我们不能假设发生了连续分配，因此遍历范围内的每个块并手动重新计算摘要。
 		summary := s.summary[len(s.summary)-1]
 		for c := sc; c <= ec; c++ {
 			summary[c] = s.chunkOf(c).summarize()
@@ -614,20 +631,25 @@ func (s *pageAlloc) update(base, npages uintptr, contig, alloc bool) {
 	}
 
 	// Walk up the radix tree and update the summaries appropriately.
+	// 遍历基数树并适当地更新摘要。
 	changed := true
 	for l := len(s.summary) - 2; l >= 0 && changed; l-- {
 		// Update summaries at level l from summaries at level l+1.
+		// 从级别l+1的摘要更新级别l的摘要。
 		changed = false
 
 		// "Constants" for the previous level which we
 		// need to compute the summary from that level.
+		// 上一级别的“常量”，我们需要从该级别计算摘要。
 		logEntriesPerBlock := levelBits[l+1]
 		logMaxPages := levelLogPages[l+1]
 
 		// lo and hi describe all the parts of the level we need to look at.
+		// lo和hi描述了我们需要研究的级别的所有部分。
 		lo, hi := addrsToSummaryRange(l, base, limit+1)
 
 		// Iterate over each block, updating the corresponding summary in the less-granular level.
+		// 遍历每个块，更新粒度较小的相应摘要。
 		for i := lo; i < hi; i++ {
 			children := s.summary[l+1][i<<logEntriesPerBlock : (i+1)<<logEntriesPerBlock]
 			sum := mergeSummaries(children, logMaxPages)
@@ -648,6 +670,12 @@ func (s *pageAlloc) update(base, npages uintptr, contig, alloc bool) {
 // allocated range.
 //
 // s.mheapLock must be held.
+//
+// allocRange标记已分配的内存范围[base，base + npages * pageSize）。它还会更新摘要以反映新更新的位图。
+//
+// 返回分配范围中存在的清除内存量（以字节为单位）。
+//
+// 必须持有s.mheapLock。
 func (s *pageAlloc) allocRange(base, npages uintptr) uintptr {
 	limit := base + npages*pageSize - 1
 	sc, ec := chunkIndex(base), chunkIndex(limit)
@@ -656,11 +684,13 @@ func (s *pageAlloc) allocRange(base, npages uintptr) uintptr {
 	scav := uint(0)
 	if sc == ec {
 		// The range doesn't cross any chunk boundaries.
+		// 该范围不跨越任何块边界。
 		chunk := s.chunkOf(sc)
 		scav += chunk.scavenged.popcntRange(si, ei+1-si)
 		chunk.allocRange(si, ei+1-si)
 	} else {
 		// The range crosses at least one chunk boundary.
+		// 该范围至少跨越了一个块边界。
 		chunk := s.chunkOf(sc)
 		scav += chunk.scavenged.popcntRange(si, pallocChunkPages-si)
 		chunk.allocRange(si, pallocChunkPages-si)
@@ -692,6 +722,18 @@ func (s *pageAlloc) allocRange(base, npages uintptr) uintptr {
 // searchAddr returned is invalid and must be ignored.
 //
 // s.mheapLock must be held.
+//
+// find搜索大小为npages的第一个（地址排序）连续空闲区域，并返回该区域的基址。
+//
+// 它使用s.searchAddr修剪其搜索，并假定chunkIndex（s.searchAddr）以下的palloc块根本不包含任何可用内存。
+//
+// find还计算并返回一个候选s.searchAddr，它可能会或可能不会比s.searchAddr已经修剪更多的地址空间。
+//
+// find表示慢速路径和完整的基数树搜索。
+//
+// 失败时返回基址0，在这种情况下，返回的候选searchAddr无效，必须忽略。
+//
+// 必须持有s.mheapLock
 func (s *pageAlloc) find(npages uintptr) (uintptr, uintptr) {
 	// Search algorithm.
 	//
@@ -719,6 +761,21 @@ func (s *pageAlloc) find(npages uintptr) (uintptr, uintptr) {
 
 	// i is the beginning of the block of entries we're searching at the
 	// current level.
+	//
+	// 搜索算法。
+    //
+    // 此算法将基数树的每个级别l从根级别移动到叶子级别。迭代基数树中给定级别的最多1 << levelBits[l]个条目，
+    // 并使用摘要信息查找以下任一个：
+    // 1）给定的子树包含足够大的连续区域，这时它将继续在下一级进行迭代，或者
+    // 2）有足够的连续边界交叉位来满足分配，此时它确切地知道从哪里开始分配。
+    //
+    // i跟踪我们实际感兴趣的连续1 << levelBits [l]条目的当前级别l结构的索引。
+    //
+    // 注意：从技术上讲，此搜索可以分配一个跨越arenaBaseOffset边界的区域，当arenaBaseOffset！= 0时，该区域是不连续的。
+    // 但是，发生这种情况的唯一方法是映射零地址处的页面，并且这在我们支持arenaBaseOffset！= 0的每个系统上都是不可能的。
+    // 因此，不连续性已经被编码，因为OS将永远不会映射零页面，并且此函数不会尝试以任何方式处理这种情况。
+
+    // i是我们正在当前级别搜索的条目块的开头。
 	i := 0
 
 	// firstFree is the region of address space that we are certain to
@@ -734,6 +791,14 @@ func (s *pageAlloc) find(npages uintptr) (uintptr, uintptr) {
 	//
 	// At the end of the search, base-arenaBaseOffset is the best new
 	// searchAddr we could deduce in this search.
+	//
+	// firstFree是我们肯定会在堆中找到第一个空闲页的地址空间区域。 base和bound是此窗口的包含边界，
+	// 并且都是地址空间的线性连续视图中的地址（预添加了arenaBaseOffset）。在每个级别上，
+	// 随着我们发现包含内存的第一个空闲页的内存区域，此窗口都会缩小。首先，该范围反映了整个进程地址空间。
+    //
+    // 每当发现堆中的可用空间时，通过调用foundFree来更新firstFree。
+    //
+    // 在搜索结束时，base-arenaBaseOffset是我们可以在此搜索中得出的最佳新searchAddr。
 	firstFree := struct {
 		base, bound uintptr
 	}{
@@ -749,15 +814,23 @@ func (s *pageAlloc) find(npages uintptr) (uintptr, uintptr) {
 	// pages on the root level and narrow that down if we descend into
 	// that summary. But as soon as we need to iterate beyond that summary
 	// in a level to find a large enough range, we'll stop narrowing.
+	//
+	// foundFree获取给定的地址范围[addr，addr + size），如果范围较小，则更新firstFree。
+	// 输入范围必须完全包含在firstFree内或完全不与它重叠。
+    //
+    // 这样，我们将记录找到的第一个摘要，并在根目录上包含所有可用页面，如果我们进入该摘要，则将其缩小。
+    // 但是，只要我们需要在某个摘要上进行迭代以找到足够大的范围，我们就会停止缩小范围。
 	foundFree := func(addr, size uintptr) {
 		if firstFree.base <= addr && addr+size-1 <= firstFree.bound {
 			// This range fits within the current firstFree window, so narrow
 			// down the firstFree window to the base and bound of this range.
+			// 此范围适合当前的firstFree窗口，因此将firstFree窗口缩小到该范围的底限和边界。
 			firstFree.base = addr
 			firstFree.bound = addr + size - 1
 		} else if !(addr+size-1 < firstFree.base || addr > firstFree.bound) {
 			// This range only partially overlaps with the firstFree range,
 			// so throw.
+			// 此范围仅与firstFree范围部分重叠，因此请抛出异常。
 			print("runtime: addr = ", hex(addr), ", size = ", size, "\n")
 			print("runtime: base = ", hex(firstFree.base), ", bound = ", hex(firstFree.bound), "\n")
 			throw("range partially overlaps")
@@ -768,26 +841,34 @@ func (s *pageAlloc) find(npages uintptr) (uintptr, uintptr) {
 	// move on to the next level. Used to print additional information in the
 	// case of a catastrophic failure.
 	// lastSumIdx is that summary's index in the previous level.
+	// lastSum是上一级别中看到的摘要，使我们可以进入下一个级别。发生灾难性故障时，用于打印其他信息。
+	// lastSumIdx是该摘要在上一级中的索引。
 	lastSum := packPallocSum(0, 0, 0)
 	lastSumIdx := -1
 
 nextLevel:
 	for l := 0; l < len(s.summary); l++ {
 		// For the root level, entriesPerBlock is the whole level.
+		// 对于根级别，entrysPerBlock是整个级别。
 		entriesPerBlock := 1 << levelBits[l]
 		logMaxPages := levelLogPages[l]
 
 		// We've moved into a new level, so let's update i to our new
 		// starting index. This is a no-op for level 0.
+		// 我们已经进入了一个新的高度，所以让我们将i更新为新的起始索引。这是0级的无操作。
 		i <<= levelBits[l]
 
 		// Slice out the block of entries we care about.
+		// 切出我们关心的条目块。
 		entries := s.summary[l][i : i+entriesPerBlock]
 
 		// Determine j0, the first index we should start iterating from.
 		// The searchAddr may help us eliminate iterations if we followed the
 		// searchAddr on the previous level or we're on the root leve, in which
 		// case the searchAddr should be the same as i after levelShift.
+		// 确定j0，这是我们应该从其开始迭代的第一个索引。
+        // 如果我们在上一级遵循searchAddr或位于根目录上，则searchAddr可以帮助我们消除迭代，
+        // 在这种情况下，searchAddr应该与levelShift之后的i相同。
 		j0 := 0
 		if searchIdx := int((s.searchAddr + arenaBaseOffset) >> levelShift[l]); searchIdx&^(entriesPerBlock-1) == i {
 			j0 = searchIdx & (entriesPerBlock - 1)
@@ -803,18 +884,26 @@ nextLevel:
 		//
 		// size contains the size of the currently considered
 		// run of consecutive pages.
+		//
+		// 在级别条目上运行，以查找条目内或条目间至少npages的连续内存。
+        //
+        // base包含当前考虑的连续页面运行的页面索引（相对于第一条目的第一页）。
+        //
+        // size包含当前考虑的连续页面的大小。
 		var base, size uint
 		for j := j0; j < len(entries); j++ {
 			sum := entries[j]
 			if sum == 0 {
 				// A full entry means we broke any streak and
 				// that we should skip it altogether.
+				// 完整的条目意味着我们打破了任何streak，应该完全跳过。
 				size = 0
 				continue
 			}
 
 			// We've encountered a non-zero summary which means
 			// free memory, so update firstFree.
+			// 我们遇到了一个非零的摘要，这意味着有可用内存，因此请更新firstFree。
 			foundFree(uintptr((i+j)<<levelShift[l]), (uintptr(1)<<logMaxPages)*pageSize)
 
 			s := sum.start()
@@ -822,10 +911,12 @@ nextLevel:
 				// If size == 0 we don't have a run yet,
 				// which means base isn't valid. So, set
 				// base to the first page in this block.
+				// 如果size == 0，则我们还没有运行，这意味着基数无效。因此，将base设置为该块的第一页。
 				if size == 0 {
 					base = uint(j) << logMaxPages
 				}
 				// We hit npages; we're done!
+				// 我们找到了npages；我们完成了！
 				size += s
 				break
 			}
@@ -833,6 +924,7 @@ nextLevel:
 				// The entry itself contains npages contiguous
 				// free pages, so continue on the next level
 				// to find that run.
+				// 条目本身包含npages个连续的空闲页面，因此请继续进行下一级查找该内存。
 				i += j
 				lastSumIdx = i
 				lastSum = sum
@@ -843,27 +935,34 @@ nextLevel:
 				// isn't totally free (meaning we can't continue the current
 				// one), so try to begin a new run by setting size and base
 				// based on sum.end.
+				// 我们没有开始当前运行，或者该条目不是完全空闲的（意味着我们无法继续当前运行），
+				// 因此请尝试通过基于sum.end设置大小和基准来开始新运行。
 				size = sum.end()
 				base = uint(j+1)<<logMaxPages - size
 				continue
 			}
 			// The entry is completely free, so continue the run.
+			// 该条目是完全免费的，因此继续运行。
 			size += 1 << logMaxPages
 		}
 		if size >= uint(npages) {
 			// We found a sufficiently large run of free pages straddling
 			// some boundary, so compute the address and return it.
+			// 我们发现有足够多的空闲页面跨越某些边界，因此请计算地址并返回它。
 			addr := uintptr(i<<levelShift[l]) - arenaBaseOffset + uintptr(base)*pageSize
 			return addr, firstFree.base - arenaBaseOffset
 		}
 		if l == 0 {
 			// We're at level zero, so that means we've exhausted our search.
+			// 我们处于零级，这意味着我们已经用尽了所有搜索。
 			return 0, maxSearchAddr
 		}
 
 		// We're not at level zero, and we exhausted the level we were looking in.
 		// This means that either our calculations were wrong or the level above
 		// lied to us. In either case, dump some useful state and throw.
+		// 我们还没有达到零级，我们已经用尽了所寻找的级别。这意味着我们的计算错误或高于我们的级别。
+		// 无论哪种情况，都转储一些有用的状态并抛出。
 		print("runtime: summary[", l-1, "][", lastSumIdx, "] = ", lastSum.start(), ", ", lastSum.max(), ", ", lastSum.end(), "\n")
 		print("runtime: level = ", l, ", npages = ", npages, ", j0 = ", j0, "\n")
 		print("runtime: s.searchAddr = ", hex(s.searchAddr), ", i = ", i, "\n")
@@ -882,11 +981,16 @@ nextLevel:
 	//
 	// After iterating over all levels, i must contain a chunk index which
 	// is what the final level represents.
+	// 既然到了这一点，那意味着我们还没有找到一个足够大的，跨越某些边界（块或更大）的空闲区域。
+    // 这意味着我们检查的最后一个摘要必须具有足够大的“最大值”值，因此请在块中查找合适的内存。
+    //
+    // 遍历所有级别后，我必须包含一个块索引，这是最终级别表示的内容。
 	ci := chunkIdx(i)
 	j, searchIdx := s.chunkOf(ci).find(npages, 0)
 	if j < 0 {
 		// We couldn't find any space in this chunk despite the summaries telling
 		// us it should be there. There's likely a bug, so dump some state and throw.
+		// 尽管摘要告诉我们应该在其中，但我们在该块中找不到任何空间。可能存在错误，因此请转储一些状态并抛出错误。
 		sum := s.summary[len(s.summary)-1][i]
 		print("runtime: summary[", len(s.summary)-1, "][", i, "] = (", sum.start(), ", ", sum.max(), ", ", sum.end(), ")\n")
 		print("runtime: npages = ", npages, "\n")
@@ -894,10 +998,12 @@ nextLevel:
 	}
 
 	// Compute the address at which the free space starts.
+	// 计算可用空间开始的地址。
 	addr := chunkBase(ci) + uintptr(j)*pageSize
 
 	// Since we actually searched the chunk, we may have
 	// found an even narrower free window.
+	// 由于实际上我们搜索了该块，因此我们可能找到了更窄的空闲窗口。
 	searchAddr := chunkBase(ci) + uintptr(searchIdx)*pageSize
 	foundFree(searchAddr+arenaBaseOffset, chunkBase(ci+1)-searchAddr)
 	return addr, firstFree.base - arenaBaseOffset
