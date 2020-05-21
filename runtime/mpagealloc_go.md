@@ -1017,18 +1017,27 @@ nextLevel:
 // should be ignored.
 //
 // s.mheapLock must be held.
+//
+// alloc从页堆中分配npages的内存，返回分配的基址和区域中包含的字节数的已清除内存量[base address，base address + npages * pageSize）。
+//
+// 失败时返回0基址，在这种情况下，其他返回值应忽略。
+//
+// 必须持有s.mheapLock。
 func (s *pageAlloc) alloc(npages uintptr) (addr uintptr, scav uintptr) {
 	// If the searchAddr refers to a region which has a higher address than
 	// any known chunk, then we know we're out of memory.
+	// 如果searchAddr所指向的区域的地址比任何已知块的地址高，则表明我们内存不足。
 	if chunkIndex(s.searchAddr) >= s.end {
 		return 0, 0
 	}
 
 	// If npages has a chance of fitting in the chunk where the searchAddr is,
 	// search it directly.
+	// 如果npages可能适合searchAddr所在的块，请直接搜索它。
 	searchAddr := uintptr(0)
 	if pallocChunkPages-chunkPageIndex(s.searchAddr) >= uint(npages) {
 		// npages is guaranteed to be no greater than pallocChunkPages here.
+		// 这里保证npages不大于pallocChunkPages。
 		i := chunkIndex(s.searchAddr)
 		if max := s.summary[len(s.summary)-1][i].max(); max >= uint(npages) {
 			j, searchIdx := s.chunkOf(i).find(npages, chunkPageIndex(s.searchAddr))
@@ -1044,6 +1053,7 @@ func (s *pageAlloc) alloc(npages uintptr) (addr uintptr, scav uintptr) {
 	}
 	// We failed to use a searchAddr for one reason or another, so try
 	// the slow path.
+	// 由于某种原因，我们未能使用searchAddr，因此请尝试慢速路径。
 	addr, searchAddr = s.find(npages)
 	if addr == 0 {
 		if npages == 1 {
@@ -1052,17 +1062,22 @@ func (s *pageAlloc) alloc(npages uintptr) (addr uintptr, scav uintptr) {
 			// exhausted. Otherwise, the heap still might have free
 			// space in it, just not enough contiguous space to
 			// accommodate npages.
+			// 我们找不到单个空闲页面，即最小的分配单元。这意味着我们知道堆已完全耗尽。
+			// 否则，堆中可能仍然有可用空间，只是没有足够的连续空间来容纳npage。
 			s.searchAddr = maxSearchAddr
 		}
 		return 0, 0
 	}
 Found:
 	// Go ahead and actually mark the bits now that we have an address.
+	// 现在，我们有了地址，继续实际标记这些位。
 	scav = s.allocRange(addr, npages)
 
 	// If we found a higher (linearized) searchAddr, we know that all the
 	// heap memory before that searchAddr in a linear address space is
 	// allocated, so bump s.searchAddr up to the new one.
+	// 如果我们找到了一个更高的（线性化的）searchAddr，我们知道线性地址空间中该searchAddr之前的所有堆内存都已分配，
+	// 因此将s.searchAddr扩展到新的。
 	if s.compareSearchAddrTo(searchAddr) > 0 {
 		s.searchAddr = searchAddr
 	}
