@@ -1087,27 +1087,36 @@ Found:
 // free returns npages worth of memory starting at base back to the page heap.
 //
 // s.mheapLock must be held.
+//
+// free从基址返回npages有价值的内存到页面堆。
+//
+// 必须持有s.mheapLock。
 func (s *pageAlloc) free(base, npages uintptr) {
 	// If we're freeing pages below the (linearized) s.searchAddr, update searchAddr.
+	// 如果我们要释放（线性化的）s.searchAddr下面的页面，请更新searchAddr。
 	if s.compareSearchAddrTo(base) < 0 {
 		s.searchAddr = base
 	}
 	if npages == 1 {
 		// Fast path: we're clearing a single bit, and we know exactly
 		// where it is, so mark it directly.
+		// 快速路径：我们清除了单一位，我们确切地知道了它的位置，因此直接对其​​进行标记。
 		i := chunkIndex(base)
 		s.chunkOf(i).free1(chunkPageIndex(base))
 	} else {
 		// Slow path: we're clearing more bits so we may need to iterate.
+		// 路径缓慢：我们正在清除更多位，因此可能需要进行迭代。
 		limit := base + npages*pageSize - 1
 		sc, ec := chunkIndex(base), chunkIndex(limit)
 		si, ei := chunkPageIndex(base), chunkPageIndex(limit)
 
 		if sc == ec {
 			// The range doesn't cross any chunk boundaries.
+			// 该范围不跨越任何块边界。
 			s.chunkOf(sc).free(si, ei+1-si)
 		} else {
 			// The range crosses at least one chunk boundary.
+			// 该范围至少跨越了一个块边界。
 			s.chunkOf(sc).free(si, pallocChunkPages-si)
 			for c := sc + 1; c < ec; c++ {
 				s.chunkOf(c).freeAll()
@@ -1123,6 +1132,7 @@ const (
 
 	// maxPackedValue is the maximum value that any of the three fields in
 	// the pallocSum may take on.
+	// maxPackedValue是pallocSum中的三个字段中的任何一个都可以取的最大值。
 	maxPackedValue    = 1 << logMaxPackedValue
 	logMaxPackedValue = logPallocChunkPages + (summaryLevels-1)*summaryLevelBits
 
@@ -1136,9 +1146,13 @@ const (
 // a bitmap and are thus counts, each of which may have a maximum value of
 // 2^21 - 1, or all three may be equal to 2^21. The latter case is represented
 // by just setting the 64th bit.
+// pallocSum是一个打包的摘要类型，它将三个数字打包在一起：start，max和end成一个8字节的值。
+// 这些值中的每一个都是位图的摘要，因此是计数，每个值的最大值可以为2 ^ 21-1，或者所有三个值可以等于2 ^ 21。
+// 后一种情况仅通过设置第64位来表示。
 type pallocSum uint64
 
 // packPallocSum takes a start, max, and end value and produces a pallocSum.
+// packPallocSum采用一个start，max和end值，并生成一个pallocSum。
 func packPallocSum(start, max, end uint) pallocSum {
 	if max == maxPackedValue {
 		return pallocSum(uint64(1 << 63))
@@ -1149,6 +1163,7 @@ func packPallocSum(start, max, end uint) pallocSum {
 }
 
 // start extracts the start value from a packed sum.
+// start从打包总和中提取start值。
 func (p pallocSum) start() uint {
 	if uint64(p)&uint64(1<<63) != 0 {
 		return maxPackedValue
@@ -1157,6 +1172,7 @@ func (p pallocSum) start() uint {
 }
 
 // max extracts the max value from a packed sum.
+// max从打包总和中提取max值。
 func (p pallocSum) max() uint {
 	if uint64(p)&uint64(1<<63) != 0 {
 		return maxPackedValue
@@ -1165,6 +1181,7 @@ func (p pallocSum) max() uint {
 }
 
 // end extracts the end value from a packed sum.
+// end从打包总和中提取end值。
 func (p pallocSum) end() uint {
 	if uint64(p)&uint64(1<<63) != 0 {
 		return maxPackedValue
@@ -1173,6 +1190,7 @@ func (p pallocSum) end() uint {
 }
 
 // unpack unpacks all three values from the summary.
+// unpack从摘要中解包所有三个值。
 func (p pallocSum) unpack() (uint, uint, uint) {
 	if uint64(p)&uint64(1<<63) != 0 {
 		return maxPackedValue, maxPackedValue, maxPackedValue
@@ -1184,19 +1202,25 @@ func (p pallocSum) unpack() (uint, uint, uint) {
 
 // mergeSummaries merges consecutive summaries which may each represent at
 // most 1 << logMaxPagesPerSum pages each together into one.
+// mergeSummaries将连续的摘要合并在一起，每个摘要最多可将每个代表最多1 << logMaxPagesPerSum页合在一起。
 func mergeSummaries(sums []pallocSum, logMaxPagesPerSum uint) pallocSum {
 	// Merge the summaries in sums into one.
 	//
 	// We do this by keeping a running summary representing the merged
 	// summaries of sums[:i] in start, max, and end.
+	// 将摘要汇总成一个。
+    //
+    // 我们通过保留一个运行摘要来表示开始，最大和结束处sums [：i]的合并摘要。
 	start, max, end := sums[0].unpack()
 	for i := 1; i < len(sums); i++ {
 		// Merge in sums[i].
+		//合并sums[i]。
 		si, mi, ei := sums[i].unpack()
 
 		// Merge in sums[i].start only if the running summary is
 		// completely free, otherwise this summary's start
 		// plays no role in the combined sum.
+		// 仅在运行摘要完全空闲时合并sums[i].start，否则此摘要的开始在合并的总和中不起作用。
 		if start == uint(i)<<logMaxPagesPerSum {
 			start += si
 		}
@@ -1205,6 +1229,7 @@ func mergeSummaries(sums []pallocSum, logMaxPagesPerSum uint) pallocSum {
 		// across the boundary between the running sum and sums[i]
 		// and at the max sums[i], taking the greatest of those two
 		// and the max of the running sum.
+		// 通过查看运行总和与sums [i]之间的边界以及最大和[i]，重新取运行总和的最大值，取两者中的最大值和运行总和的最大值。
 		if end+si > max {
 			max = end + si
 		}
@@ -1217,6 +1242,8 @@ func mergeSummaries(sums []pallocSum, logMaxPagesPerSum uint) pallocSum {
 		// end by the new summary. If not, then we have some alloc'd
 		// pages in there and we just want to take the end value in
 		// sums[i].
+		// 通过检查此新摘要是否完全空闲g来最终合并。如果是，那么我们要用新的摘要扩展运行总和的结尾。
+		// 如果不是，那么我们那里有一些分配的页面，我们只想取sums [i]的最终值。
 		if ei == 1<<logMaxPagesPerSum {
 			end += 1 << logMaxPagesPerSum
 		} else {
