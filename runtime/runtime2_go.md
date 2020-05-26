@@ -332,6 +332,25 @@ func efaceOf(ep *interface{}) *eface {
 // so I can't see them ever moving. If we did want to start moving data
 // in the GC, we'd need to allocate the goroutine structs from an
 // alternate arena. Using guintptr doesn't make that problem any worse.
+//
+// guintptr，muintptr和puintptr都用于绕过写屏障。释放当前P时避免写屏障尤为重要，
+// 因为GC认为全局已停机，并且意外的写屏障不会与GC同步，这可能导致半执行的写屏障标记了对象但未将其排队。
+// 如果GC跳过对象并在排队之前完成，它将错误地释放对象。
+//
+// 我们尝试使用仅在不持有运行P的情况下才调用的特殊赋值函数，但随后对特定存储字的某些更新会遇到写屏障，而某些则不会。
+// 这打破了写屏障阴影检查模式，而且也很可怕：拥有一个被GC完全忽略的单词比拥有一个只被少数更新忽略的单词更好。
+//
+// Gs和Ps始终可以通过allgs和allp列表中的真实指针或（从分配过程中到达它们的列表之前）堆栈变量中的真实指针访问。
+//
+// 总是可以通过来自allm或freem的真实指针来访问M。与Gs和Ps不同，我们免费提供Ms，因此，任何人都不能在安全点上持有muintptr，这一点很重要。
+
+// guintptr拥有一个goroutine指针，但被键入为uintptr来绕过写屏障。在Gobuf goroutine状态和不使用P进行操作的调度列表中使用。
+//
+// Gobuf.g goroutine指针几乎总是由汇编代码更新。在少数几个地方，它会通过Go代码进行更新-func save-必须将其视为uintptr，
+// 以避免在不好的时候发出写屏障。我们没有弄清楚如何发出汇编操作中缺少的写屏障，而是将字段的类型更改为uintptr，因此它根本不需要写屏障。
+//
+// Goroutine结构在allg列表中发布，并且从不释放。这样可以避免收集goroutine结构。从来没有机会Gobuf.g仅包含对goroutine的引用：首先在allg中发布goroutine。
+// Goroutine指针也保存在TLS等非GC可见的位置，因此我看不到它们一直在移动。如果确实要在GC中开始移动数据，则需要从备用区域分配goroutine结构。使用guintptr不会使这个问题更严重。
 type guintptr uintptr
 
 //go:nosplit
@@ -347,6 +366,8 @@ func (gp *guintptr) cas(old, new guintptr) bool {
 
 // setGNoWB performs *gp = new without a write barrier.
 // For times when it's impractical to use a guintptr.
+//
+// setGNoWB执行*gp = new，没有写屏障。有时无法使用guintptr。
 //go:nosplit
 //go:nowritebarrier
 func setGNoWB(gp **g, new *g) {
@@ -370,6 +391,14 @@ func (pp *puintptr) set(p *p) { *pp = puintptr(unsafe.Pointer(p)) }
 //
 // 2. Any muintptr in the heap must be owned by the M itself so it can
 //    ensure it is not in use when the last true *m is released.
+//
+// muintptr是垃圾收集器未跟踪的* m。
+//
+// 因为我们释放m，所以在muintptrs上还有一些其他限制：
+//
+// 1.切勿在安全点附近本地持有muintptr。
+//
+// 2.堆中的任何muintptr都必须归M自己所有，这样它可以确保在释放最后一个true * m时不使用它。
 type muintptr uintptr
 
 //go:nosplit
@@ -380,6 +409,8 @@ func (mp *muintptr) set(m *m) { *mp = muintptr(unsafe.Pointer(m)) }
 
 // setMNoWB performs *mp = new without a write barrier.
 // For times when it's impractical to use an muintptr.
+//
+// setMNoWB执行*mp = new，没有写屏障。有时不适合使用muintptr。
 //go:nosplit
 //go:nowritebarrier
 func setMNoWB(mp **m, new *m) {
@@ -399,6 +430,12 @@ type gobuf struct {
 	// and restores it doesn't need write barriers. It's still
 	// typed as a pointer so that any other writes from Go get
 	// write barriers.
+	//
+	// libmach已知（硬编码在其中）sp，pc和g的偏移量。
+    //
+    // ctxt对于GC不常见：它可能是堆分配的funcval，因此GC需要对其进行跟踪，但需要对其进行设置并将其从汇编中清除，这在这里很难实现写屏障。
+    // 但是，ctxt实际上是一个保存的实时寄存器，我们只在真实寄存器和gobuf之间交换它。因此，我们在堆栈扫描期间将其视为根，
+    // 这意味着保存和恢复它的程序集不需要写屏障。它仍然被用作指针，以便Go进行的任何其他写入都会遇到写入屏障。
 	sp   uintptr
 	pc   uintptr
 	g    guintptr
@@ -418,54 +455,71 @@ type gobuf struct {
 //
 // sudogs are allocated from a special pool. Use acquireSudog and
 // releaseSudog to allocate and free them.
+//
+// sudog在等待列表中表示g，例如用于在通道上发送/接收。
+//
+// sudog是必需的，因为g↔同步对象关系是多对多的。一个g可以出现在许多等待列表上，因此一个g可能有很多sudog。
+// 并且许多g可能正在等待同一个同步对象，因此一个对象可能有许多sudog。
+//
+// sudog是从特殊池中分配的。使用acquireSudog和releaseSudog分配和释放它们。
 type sudog struct {
 	// The following fields are protected by the hchan.lock of the
 	// channel this sudog is blocking on. shrinkstack depends on
 	// this for sudogs involved in channel ops.
+	//
+	// 以下字段受此sudog阻止的通道的hchan.lock保护。对于参与通道操作的sudog，srinkstack依赖于此。
 
 	g *g
 
 	// isSelect indicates g is participating in a select, so
 	// g.selectDone must be CAS'd to win the wake-up race.
+	// isSelect表示g正在参与选择，因此必须对g.selectDone进行CAS才能赢得竞争。
 	isSelect bool
 	next     *sudog
 	prev     *sudog
-	elem     unsafe.Pointer // data element (may point to stack)
+	elem     unsafe.Pointer // data element (may point to stack) // 数据元素（可能指向堆栈）
 
 	// The following fields are never accessed concurrently.
 	// For channels, waitlink is only accessed by g.
 	// For semaphores, all fields (including the ones above)
 	// are only accessed when holding a semaRoot lock.
+	//
+	// 绝不能同时访问以下字段。
+    // 对于通道，waitlink仅由g访问。
+    // 对于信号量，仅当持有semaRoot锁时才能访问所有字段（包括上述字段）。
 
 	acquiretime int64
 	releasetime int64
 	ticket      uint32
-	parent      *sudog // semaRoot binary tree
-	waitlink    *sudog // g.waiting list or semaRoot
+	parent      *sudog // semaRoot binary tree // semaRoot二叉树
+	waitlink    *sudog // g.waiting list or semaRoot g.waiting列表或semaRoot
 	waittail    *sudog // semaRoot
 	c           *hchan // channel
 }
 
 type libcall struct {
 	fn   uintptr
-	n    uintptr // number of parameters
-	args uintptr // parameters
-	r1   uintptr // return values
+	n    uintptr // number of parameters // 参数数量
+	args uintptr // parameters // 参数
+	r1   uintptr // return values // 返回值
 	r2   uintptr
-	err  uintptr // error number
+	err  uintptr // error number // 错误码
 }
 
 // describes how to handle callback
+// 描述如何处理回调
 type wincallbackcontext struct {
-	gobody       unsafe.Pointer // go function to call
-	argsize      uintptr        // callback arguments size (in bytes)
-	restorestack uintptr        // adjust stack on return by (in bytes) (386 only)
+	gobody       unsafe.Pointer // go function to call // go函数调用
+	argsize      uintptr        // callback arguments size (in bytes) // 回调参数的大小（以字节为单位）
+	restorestack uintptr        // adjust stack on return by (in bytes) (386 only) // 调整返回时的堆栈（以字节为单位）（仅386）
 	cleanstack   bool
 }
 
 // Stack describes a Go execution stack.
 // The bounds of the stack are exactly [lo, hi),
 // with no implicit data structures on either side.
+//
+// 堆栈描述了Go执行堆栈。堆栈的边界正好是[lo，hi），在每一侧都没有隐式数据结构。
 type stack struct {
 	lo uintptr
 	hi uintptr
@@ -479,63 +533,74 @@ type g struct {
 	// stackguard1 is the stack pointer compared in the C stack growth prologue.
 	// It is stack.lo+StackGuard on g0 and gsignal stacks.
 	// It is ~0 on other goroutine stacks, to trigger a call to morestackc (and crash).
-	stack       stack   // offset known to runtime/cgo
-	stackguard0 uintptr // offset known to liblink
-	stackguard1 uintptr // offset known to liblink
+	//
+	// 堆栈参数。
+    // 堆栈描述实际的堆栈内存：[stack.lo，stack.hi）。
+    // stackguard0是在Go堆栈增长序言中比较的堆栈指针。
+    // 通常是stack.lo + StackGuard，但是可以通过StackPreempt触发抢占。
+    // stackguard1是在C堆栈增长序言中比较的堆栈指针。
+    // 它是g0和gsignal堆栈上的stack.lo + StackGuard。
+    // 在其他goroutine堆栈上为〜0，以触发对morestackc的调用（并崩溃）。
+	stack       stack   // offset known to runtime/cgo // runtime/cgo已知的偏移量
+	stackguard0 uintptr // offset known to liblink // liblink已知的偏移量
+	stackguard1 uintptr // offset known to liblink // liblink已知的偏移量
 
-	_panic       *_panic // innermost panic - offset known to liblink
-	_defer       *_defer // innermost defer
-	m            *m      // current m; offset known to arm liblink
+	_panic       *_panic // innermost panic - offset known to liblink //最内层的恐慌-liblink已知的偏移量
+	_defer       *_defer // innermost defer //最内层的defer
+	m            *m      // current m; offset known to arm liblink // 当前的m;偏移量为“arm liblink”已知
 	sched        gobuf
-	syscallsp    uintptr        // if status==Gsyscall, syscallsp = sched.sp to use during gc
-	syscallpc    uintptr        // if status==Gsyscall, syscallpc = sched.pc to use during gc
-	stktopsp     uintptr        // expected sp at top of stack, to check in traceback
-	param        unsafe.Pointer // passed parameter on wakeup
+	syscallsp    uintptr        // if status==Gsyscall, syscallsp = sched.sp to use during gc // 如果status == Syscall，则syscall = schedule.sp在gc期间使用
+	syscallpc    uintptr        // if status==Gsyscall, syscallpc = sched.pc to use during gc // 如果status == Syscall，则syscall = schedule.pc在gc期间使用
+	stktopsp     uintptr        // expected sp at top of stack, to check in traceback // 预期sp位于堆栈顶部，回溯时检验
+	param        unsafe.Pointer // passed parameter on wakeup // 唤醒时传递的参数
 	atomicstatus uint32
-	stackLock    uint32 // sigprof/scang lock; TODO: fold in to atomicstatus
+	stackLock    uint32 // sigprof/scang lock; TODO: fold in to atomicstatus // sigprof/scang锁定； TODO：折入atomicstatus
 	goid         int64
 	schedlink    guintptr
-	waitsince    int64      // approx time when the g become blocked
+	waitsince    int64      // approx time when the g become blocked // g被阻塞的大约时间
 	waitreason   waitReason // if status==Gwaiting
 
-	preempt       bool // preemption signal, duplicates stackguard0 = stackpreempt
-	preemptStop   bool // transition to _Gpreempted on preemption; otherwise, just deschedule
-	preemptShrink bool // shrink stack at synchronous safe point
+	preempt       bool // preemption signal, duplicates stackguard0 = stackpreempt // 抢占信号，重复stackguard0 = stackpreempt
+	preemptStop   bool // transition to _Gpreempted on preemption; otherwise, just deschedule //抢占时过渡到_Gpreempted；否则，只是排期
+	preemptShrink bool // shrink stack at synchronous safe point // 在同步安全点收缩堆栈
 
 	// asyncSafePoint is set if g is stopped at an asynchronous
 	// safe point. This means there are frames on the stack
 	// without precise pointer information.
+	// 如果g在异步安全点停止，则设置asyncSafePoint。这意味着堆栈中的某些帧没有精确的指针信息。
 	asyncSafePoint bool
 
-	paniconfault bool // panic (instead of crash) on unexpected fault address
-	gcscandone   bool // g has scanned stack; protected by _Gscan bit in status
-	throwsplit   bool // must not split stack
+	paniconfault bool // panic (instead of crash) on unexpected fault address // 对意外错误地址进行恐慌（而不是崩溃）
+	gcscandone   bool // g has scanned stack; protected by _Gscan bit in status // g已扫描堆栈；受状态中的_Gscan位保护
+	throwsplit   bool // must not split stack // 不得拆分堆栈
 	// activeStackChans indicates that there are unlocked channels
 	// pointing into this goroutine's stack. If true, stack
 	// copying needs to acquire channel locks to protect these
 	// areas of the stack.
+	//
+	// activeStackChans指示有指向该goroutine堆栈的未锁定通道。如果为true，则堆栈复制需要获取通道锁以保护堆栈的这些区域。
 	activeStackChans bool
 
-	raceignore     int8     // ignore race detection events
-	sysblocktraced bool     // StartTrace has emitted EvGoInSyscall about this goroutine
-	sysexitticks   int64    // cputicks when syscall has returned (for tracing)
-	traceseq       uint64   // trace event sequencer
-	tracelastp     puintptr // last P emitted an event for this goroutine
+	raceignore     int8     // ignore race detection events // 忽略竞态检测事件
+	sysblocktraced bool     // StartTrace has emitted EvGoInSyscall about this goroutine // StartTrace已发出有关此goroutine的EvGoInSyscall
+	sysexitticks   int64    // cputicks when syscall has returned (for tracing) // 返回系统调用后的cputicks（用于跟踪）
+	traceseq       uint64   // trace event sequencer //跟踪事件序列器
+	tracelastp     puintptr // last P emitted an event for this goroutine // 最后一个P为此goroutine发出了一个事件
 	lockedm        muintptr
 	sig            uint32
 	writebuf       []byte
 	sigcode0       uintptr
 	sigcode1       uintptr
 	sigpc          uintptr
-	gopc           uintptr         // pc of go statement that created this goroutine
-	ancestors      *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
-	startpc        uintptr         // pc of goroutine function
+	gopc           uintptr         // pc of go statement that created this goroutine // 创建该goroutine的go语句的pc
+	ancestors      *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors) // 创建此goroutine的祖先信息goroutine（仅在debug.tracebackancestors中使用）
+	startpc        uintptr         // pc of goroutine function // pc goroutine函数
 	racectx        uintptr
-	waiting        *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
-	cgoCtxt        []uintptr      // cgo traceback context
-	labels         unsafe.Pointer // profiler labels
-	timer          *timer         // cached timer for time.Sleep
-	selectDone     uint32         // are we participating in a select and did someone win the race?
+	waiting        *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order // 这个g正在等待的sudog结构（具有有效的elem ptr）；锁定顺序
+	cgoCtxt        []uintptr      // cgo traceback context // cgo回溯背景
+	labels         unsafe.Pointer // profiler labels //分析器标签
+	timer          *timer         // cached timer for time.Sleep // 缓存时间的计时器
+	selectDone     uint32         // are we participating in a select and did someone win the race? // 我们是否参加了选择竞争，有人赢得了竞争吗？
 
 	// Per-G GC state
 
@@ -546,6 +611,10 @@ type g struct {
 	// scan work. We track this in bytes to make it fast to update
 	// and check for debt in the malloc hot path. The assist ratio
 	// determines how this corresponds to scan work debt.
+	//
+	// gcAssistBytes是该G的GC辅助功劳，以分配的字节数表示。如果这是正数，则G可以分配gcAssistBytes字节而无需协助。
+	// 如果结果是负数的，则G必须通过执行扫描工作来更正此问题。我们以字节为单位跟踪此记录，
+	// 以使其快速更新并检查malloc热路径中的债务。协助比率确定这与扫描工作债务的对应关系。
 	gcAssistBytes int64
 }
 
