@@ -1109,50 +1109,57 @@ type _defer struct {
 // _panic values only live on the stack, regular stack pointer
 // adjustment takes care of them.
 //
+// _panic包含有关活动恐慌的信息。
+//
+//这被标记为go：notinheap，因为_panic值只能存在于栈中。
+//
+// argp和link字段是栈指针，但是在栈增长过程中不需要特殊处理：因为它们是指针类型的，并且_panic值仅存在于堆栈中，所以定期进行栈指针调整就可以了。
+//
 //go:notinheap
 type _panic struct {
-	argp      unsafe.Pointer // pointer to arguments of deferred call run during panic; cannot move - known to liblink
-	arg       interface{}    // argument to panic
-	link      *_panic        // link to earlier panic
-	pc        uintptr        // where to return to in runtime if this panic is bypassed
-	sp        unsafe.Pointer // where to return to in runtime if this panic is bypassed
-	recovered bool           // whether this panic is over
-	aborted   bool           // the panic was aborted
+	argp      unsafe.Pointer // pointer to arguments of deferred call run during panic; cannot move - known to liblink // 恐慌期间运行的延迟调用参数的指针；无法移动-为liblink已知
+	arg       interface{}    // argument to panic // 恐慌的参数
+	link      *_panic        // link to earlier panic // 链接到更早的恐慌
+	pc        uintptr        // where to return to in runtime if this panic is bypassed // 如果忽略了此恐慌情况，告知运行时返回哪里
+	sp        unsafe.Pointer // where to return to in runtime if this panic is bypassed // 如果忽略了此恐慌情况，告知运行时返回哪里
+	recovered bool           // whether this panic is over // 恐慌是否结束
+	aborted   bool           // the panic was aborted // 恐慌中止了
 	goexit    bool
 }
 
-// stack traces
+// stack traces // 堆栈跟踪
 type stkframe struct {
-	fn       funcInfo   // function being run
-	pc       uintptr    // program counter within fn
-	continpc uintptr    // program counter where execution can continue, or 0 if not
-	lr       uintptr    // program counter at caller aka link register
-	sp       uintptr    // stack pointer at pc
-	fp       uintptr    // stack pointer at caller aka frame pointer
-	varp     uintptr    // top of local variables
-	argp     uintptr    // pointer to function arguments
-	arglen   uintptr    // number of bytes at argp
-	argmap   *bitvector // force use of this argmap
+	fn       funcInfo   // function being run // 正在运行的函数
+	pc       uintptr    // program counter within fn // fn中的程序计数器
+	continpc uintptr    // program counter where execution can continue, or 0 if not // 可以继续执行的程序计数器，否则返回0
+	lr       uintptr    // program counter at caller aka link register // 调用方又称为链接寄存器的程序计数器
+	sp       uintptr    // stack pointer at pc // pc上的栈指针
+	fp       uintptr    // stack pointer at caller aka frame pointer // 调用者又称为栈指针的栈指针
+	varp     uintptr    // top of local variables // 局部变量的顶部
+	argp     uintptr    // pointer to function arguments // 指向函数参数的指针
+	arglen   uintptr    // number of bytes at argp // argp处的字节数
+	argmap   *bitvector // force use of this argmap // 强制使用此argmap
 }
 
-// ancestorInfo records details of where a goroutine was started.
+// ancestorInfo records details of where a goroutine was started. // ancestorInfo记录goroutine从何处开始的详细信息。
 type ancestorInfo struct {
-	pcs  []uintptr // pcs from the stack of this goroutine
-	goid int64     // goroutine id of this goroutine; original goroutine possibly dead
-	gopc uintptr   // pc of go statement that created this goroutine
+	pcs  []uintptr // pcs from the stack of this goroutine // 此goroutine的栈中的程序计数器
+	goid int64     // goroutine id of this goroutine; original goroutine possibly dead // 此goroutine的goroutine ID；原始goroutine可能已死
+	gopc uintptr   // pc of go statement that created this goroutine // 创建该goroutine的go语句的pc
 }
 
 const (
-	_TraceRuntimeFrames = 1 << iota // include frames for internal runtime functions.
-	_TraceTrap                      // the initial PC, SP are from a trap, not a return PC from a call
-	_TraceJumpStack                 // if traceback is on a systemstack, resume trace at g that called into it
+	_TraceRuntimeFrames = 1 << iota // include frames for internal runtime functions. // 包含内部运行时功能的栈。
+	_TraceTrap                      // the initial PC, SP are from a trap, not a return PC from a call // 初始PC，SP来自陷阱，而不是调用返回PC
+	_TraceJumpStack                 // if traceback is on a systemstack, resume trace at g that called into it // 如果回溯在系统堆栈上，则在调用它的g处继续跟踪
 )
 
-// The maximum number of frames we print for a traceback
+// The maximum number of frames we print for a traceback // 我们为回溯打印的最大帧数
 const _TracebackMaxFrames = 100
 
 // A waitReason explains why a goroutine has been stopped.
 // See gopark. Do not re-use waitReasons, add new ones.
+// waitReason解释了为什么goroutine已停止。参见gopark。不要重复使用waitReasons，添加新的。
 type waitReason uint8
 
 const (
