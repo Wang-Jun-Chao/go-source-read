@@ -178,6 +178,7 @@ func (ci *Frames) Next() (frame Frame, more bool) {
 
 // runtime_expandFinalInlineFrame expands the final pc in stk to include all
 // "callers" if pc is inline.
+// runtime_expandFinalInlineFrame如果pc是内联的，则将stk中的最终pc扩展为包括所有“调用方”。
 //
 //go:linkname runtime_expandFinalInlineFrame runtime/pprof.runtime_expandFinalInlineFrame
 func runtime_expandFinalInlineFrame(stk []uintptr) []uintptr {
@@ -202,12 +203,15 @@ func runtime_expandFinalInlineFrame(stk []uintptr) []uintptr {
 	// Treat the previous func as normal. We haven't actually checked, but
 	// since this pc was included in the stack, we know it shouldn't be
 	// elided.
+	// 将以前的func视为正常。我们实际上并未进行检查，但是由于此PC已包含在堆栈中，因此我们知道不应删除它。
 	lastFuncID := funcID_normal
 
 	// Remove pc from stk; we'll re-add it below.
+	// 从stk删除pc；我们将在下面重新添加。
 	stk = stk[:len(stk)-1]
 
 	// See inline expansion in gentraceback.
+	// 请参阅gentraceback中的内联扩展。
 	var cache pcvalueCache
 	inltree := (*[1 << 20]inlinedCall)(inldata)
 	for {
@@ -222,11 +226,13 @@ func runtime_expandFinalInlineFrame(stk []uintptr) []uintptr {
 		}
 		lastFuncID = inltree[ix].funcID
 		// Back up to an instruction in the "caller".
+		// 备份到“调用方”中的指令。
 		tracepc = f.entry + uintptr(inltree[ix].parentPc)
 		pc = tracepc + 1
 	}
 
 	// N.B. we want to keep the last parentPC which is not inline.
+	// N.B.我们要保留最后一个非内联的parentPC。
 	stk = append(stk, pc)
 
 	return stk
@@ -235,12 +241,14 @@ func runtime_expandFinalInlineFrame(stk []uintptr) []uintptr {
 // expandCgoFrames expands frame information for pc, known to be
 // a non-Go function, using the cgoSymbolizer hook. expandCgoFrames
 // returns nil if pc could not be expanded.
+// expandCgoFrames使用cgoSymbolizer钩子扩展pc的帧信息，这是一个非Go函数。如果无法扩展pc，expandCgoFrames返回nil。
 func expandCgoFrames(pc uintptr) []Frame {
 	arg := cgoSymbolizerArg{pc: pc}
 	callCgoSymbolizer(&arg)
 
 	if arg.file == nil && arg.funcName == nil {
 		// No useful information from symbolizer.
+		// 没有来自符号生成器的有用信息。
 		return nil
 	}
 
@@ -255,6 +263,7 @@ func expandCgoFrames(pc uintptr) []Frame {
 			Entry:    arg.entry,
 			// funcInfo is zero, which implies !funcInfo.valid().
 			// That ensures that we use the File/Line info given here.
+			// funcInfo为零，表示!funcInfo.valid()。这样可以确保我们使用此处提供的文件/行信息。
 		})
 		if arg.more == 0 {
 			break
@@ -266,6 +275,8 @@ func expandCgoFrames(pc uintptr) []Frame {
 	// We don't try to maintain a single cgoSymbolizerArg for the
 	// whole use of Frames, because there would be no good way to tell
 	// the symbolizer when we are done.
+	// 此PC没有更多帧。告诉符号化器我们已经完成。我们不会在整个框架的使用中都尝试维护一个cgoSymbolizerizerArg，
+	// 因为没有什么好方法可以告诉符号化器何时完成。
 	arg.pc = 0
 	callCgoSymbolizer(&arg)
 
@@ -277,10 +288,14 @@ func expandCgoFrames(pc uintptr) []Frame {
 // with (say) *f = Func{}.
 // All code operating on a *Func must call raw() to get the *_func
 // or funcInfo() to get the funcInfo instead.
+//
+// 注意：Func不会公开实际的未导出字段，因为我们将*Func值返回给用户，并且我们希望防止它们能够用*f = Func{}覆盖数据。
+// 在*Func上运行的所有代码都必须调用raw()来获取* _func或funcInfo()来获取funcInfo。
 
 // A Func represents a Go function in the running binary.
+// Func代表正在运行的二进制文件中的Go函数。
 type Func struct {
-	opaque struct{} // unexported field to disallow conversions
+	opaque struct{} // unexported field to disallow conversions // 未导出的字段禁止转换
 }
 
 func (f *Func) raw() *_func {
