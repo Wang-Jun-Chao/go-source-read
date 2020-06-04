@@ -553,15 +553,16 @@ type functab struct {
 }
 
 // Mapping information for secondary text sections
+// 二级文本段的映射信息
 
 type textsect struct {
-	vaddr    uintptr // prelinked section vaddr
-	length   uintptr // section length
-	baseaddr uintptr // relocated section address
+	vaddr    uintptr // prelinked section vaddr // 预链接的段vaddr
+	length   uintptr // section length // 段长
+	baseaddr uintptr // relocated section address //重新分配的段地址
 }
 
-const minfunc = 16                 // minimum function size
-const pcbucketsize = 256 * minfunc // size of bucket in the pc->func lookup table
+const minfunc = 16                 // minimum function size // 最小函数大小
+const pcbucketsize = 256 * minfunc // size of bucket in the pc->func lookup table // pc->func查找表中存储区的大小
 
 // findfunctab is an array of these structures.
 // Each bucket represents 4096 bytes of the text segment.
@@ -571,6 +572,12 @@ const pcbucketsize = 256 * minfunc // size of bucket in the pc->func lookup tabl
 // function index. Then scan the functab array starting at that
 // index to find the target function.
 // This table uses 20 bytes for every 4096 bytes of code, or ~0.5% overhead.
+//
+// findfunctab是这些结构的数组。
+// 每个存储段代表4096个字节的文本段。
+// 每个子桶代表256个字节的文本段。
+// 要查找给定pc的功能，请找到该pc的存储桶和子存储桶。将idx和subbucket值相加以获得函数索引。然后从该索引处开始扫描functab数组以找到目标函数。
+// 此表每4096个字节的代码使用20个字节，或〜0.5％的开销。
 type findfuncbucket struct {
 	idx        uint32
 	subbuckets [16]byte
@@ -588,6 +595,7 @@ func moduledataverify1(datap *moduledata) {
 	// See golang.org/s/go12symtab for header: 0xfffffffb,
 	// two zero bytes, a byte giving the PC quantum,
 	// and a byte giving the pointer width in bytes.
+	// 有关头部信息，请参见golang.org/s/go12symtab：0xfffffffb，两个零字节，一个字节给出PC量子，一个字节给出指针宽度（以字节为单位）。
 	pcln := *(**[8]byte)(unsafe.Pointer(&datap.pclntable))
 	pcln32 := *(**[2]uint32)(unsafe.Pointer(&datap.pclntable))
 	if pcln32[0] != 0xfffffffb || pcln[4] != 0 || pcln[5] != 0 || pcln[6] != sys.PCQuantum || pcln[7] != sys.PtrSize {
@@ -596,9 +604,11 @@ func moduledataverify1(datap *moduledata) {
 	}
 
 	// ftab is lookup table for function by program counter.
+	// ftab是按程序计数器查找功能的表。
 	nftab := len(datap.ftab) - 1
 	for i := 0; i < nftab; i++ {
 		// NOTE: ftab[nftab].entry is legal; it is the address beyond the final function.
+		// 注意：ftab[nftab].entry是合法的； 它是最终功能之外的地址。
 		if datap.ftab[i].entry > datap.ftab[i+1].entry {
 			f1 := funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i].funcoff])), datap}
 			f2 := funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i+1].funcoff])), datap}
@@ -636,6 +646,10 @@ func moduledataverify1(datap *moduledata) {
 // If pc represents multiple functions because of inlining, it returns
 // the a *Func describing the innermost function, but with an entry
 // of the outermost function.
+//
+// FuncForPC返回*Func，描述包含给定程序计数器地址的函数，否则为nil。
+//
+// 如果pc由于内联而表示多个函数，它将返回*Func描述最内部的函数，但带有最外部的函数的条目。
 func FuncForPC(pc uintptr) *Func {
 	f := findfunc(pc)
 	if !f.valid() {
@@ -646,12 +660,15 @@ func FuncForPC(pc uintptr) *Func {
 		// We just report the preceding function in that situation. See issue 29735.
 		// TODO: Perhaps we should report no function at all in that case.
 		// The runtime currently doesn't have function end info, alas.
+		// 注意：strict = false，因此错误的PC（功能之间的PC）不会使运行时崩溃。 我们只是报告这种情况下的先前功能。 请参阅问题29735。
+		// TODO：在这种情况下，也许我们根本不报告任何功能。
+		// 运行时当前没有函数结束信息。
 		if ix := pcdatavalue1(f, _PCDATA_InlTreeIndex, pc, nil, false); ix >= 0 {
 			inltree := (*[1 << 20]inlinedCall)(inldata)
 			name := funcnameFromNameoff(f, inltree[ix].func_)
 			file, line := funcline(f, pc)
 			fi := &funcinl{
-				entry: f.entry, // entry of the real (the outermost) function.
+				entry: f.entry, // entry of the real (the outermost) function. // 实际（最外层）函数的入口。
 				name:  name,
 				file:  file,
 				line:  int(line),
@@ -663,12 +680,13 @@ func FuncForPC(pc uintptr) *Func {
 }
 
 // Name returns the name of the function.
+// Name返回函数的名称。
 func (f *Func) Name() string {
 	if f == nil {
 		return ""
 	}
 	fn := f.raw()
-	if fn.entry == 0 { // inlined version
+	if fn.entry == 0 { // inlined version // 内联版本
 		fi := (*funcinl)(unsafe.Pointer(fn))
 		return fi.name
 	}
@@ -676,9 +694,10 @@ func (f *Func) Name() string {
 }
 
 // Entry returns the entry address of the function.
+// Entry返回函数的入口地址。
 func (f *Func) Entry() uintptr {
 	fn := f.raw()
-	if fn.entry == 0 { // inlined version
+	if fn.entry == 0 { // inlined version // 内联版本
 		fi := (*funcinl)(unsafe.Pointer(fn))
 		return fi.entry
 	}
@@ -689,14 +708,17 @@ func (f *Func) Entry() uintptr {
 // source code corresponding to the program counter pc.
 // The result will not be accurate if pc is not a program
 // counter within f.
+// FileLine返回与程序计数器pc对应的源代码的文件名和行号。
+// 如果pc不是f中的程序计数器，则结果将不准确。
 func (f *Func) FileLine(pc uintptr) (file string, line int) {
 	fn := f.raw()
-	if fn.entry == 0 { // inlined version
+	if fn.entry == 0 { // inlined version // 内联版本
 		fi := (*funcinl)(unsafe.Pointer(fn))
 		return fi.file, fi.line
 	}
 	// Pass strict=false here, because anyone can call this function,
 	// and they might just be wrong about targetpc belonging to f.
+	// 在此处传递strict = false，因为任何人都可以调用此函数，而他们对于属于f的targetpc可能只是错误的。
 	file, line32 := funcline1(f.funcInfo(), pc, false)
 	return file, int(line32)
 }
@@ -740,6 +762,8 @@ func findfunc(pc uintptr) funcInfo {
 	// If the idx is beyond the end of the ftab, set it to the end of the table and search backward.
 	// This situation can occur if multiple text sections are generated to handle large text sections
 	// and the linker has inserted jump tables between them.
+	// 如果idx超出ftab的末尾，请将其设置为表的末尾并向后搜索。
+    // 如果生成多个文本段来处理较大的文本段，并且链接器在它们之间插入了跳转表，则可能会发生这种情况。
 
 	if idx >= uint32(len(datap.ftab)) {
 		idx = uint32(len(datap.ftab) - 1)
@@ -747,6 +771,7 @@ func findfunc(pc uintptr) funcInfo {
 	if pc < datap.ftab[idx].entry {
 		// With multiple text sections, the idx might reference a function address that
 		// is higher than the pc being searched, so search backward until the matching address is found.
+		// 对于多个文本段，idx可能引用的功能地址高于要搜索的pc，因此请向后搜索直到找到匹配的地址。
 
 		for datap.ftab[idx].entry > pc && idx > 0 {
 			idx--
@@ -755,7 +780,7 @@ func findfunc(pc uintptr) funcInfo {
 			throw("findfunc: bad findfunctab entry idx")
 		}
 	} else {
-		// linear search to find func with pc >= entry.
+		// linear search to find func with pc >= entry. //使用pc >= entry，线性搜索查找函数。
 		for datap.ftab[idx+1].entry <= pc {
 			idx++
 		}
@@ -766,6 +791,8 @@ func findfunc(pc uintptr) funcInfo {
 		// linker that are not known by Go. This means there may be holes in the PC
 		// range covered by the func table. The invalid funcoff value indicates a hole.
 		// See also cmd/link/internal/ld/pcln.go:pclntab
+		// 对于多个文本节段，可能是外部链接器插入了Go未知的功能。这意味着func表覆盖的PC范围中可能有孔。
+		// 无效的funcoff值表示有孔。另请参阅cmd/link/internal/ld/pcln.go:pclntab
 		return funcInfo{}
 	}
 	return funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[funcoff])), datap}
@@ -777,9 +804,11 @@ type pcvalueCache struct {
 
 type pcvalueCacheEnt struct {
 	// targetpc and off together are the key of this cache entry.
+	// targetpc和off一起是此缓存项的键。
 	targetpc uintptr
 	off      int32
 	// val is the value of this cached pcvalue entry.
+	// val是此缓存的pcvalue条目的值。
 	val int32
 }
 
@@ -787,6 +816,8 @@ type pcvalueCacheEnt struct {
 // It must be very cheap to calculate.
 // For now, align to sys.PtrSize and reduce mod the number of entries.
 // In practice, this appears to be fairly randomly and evenly distributed.
+// pcvalueCacheKey返回pcvalueCache中最外面的索引以用于targetpc。计算它必须非常廉价。
+// 现在，对齐sys.PtrSize并减少mod的条目数。实际上，这似乎是相当随机且均匀分布的。
 func pcvalueCacheKey(targetpc uintptr) uintptr {
 	return (targetpc / sys.PtrSize) % uintptr(len(pcvalueCache{}.entries))
 }
@@ -802,6 +833,10 @@ func pcvalue(f funcInfo, off int32, targetpc uintptr, cache *pcvalueCache, stric
 	// This cache is small enough that full associativity is
 	// cheaper than doing the hashing for a less associative
 	// cache.
+	//
+	// 检查缓存。这加快了深层堆栈的运行速度，深层堆栈往往一遍又一遍地具有相同的递归功能。
+    //
+    // 此缓存足够小，以至于与不那么相关的缓存进行哈希处理相比，完全关联性要廉价。
 	if cache != nil {
 		x := pcvalueCacheKey(targetpc)
 		for i := range cache.entries[x] {
@@ -810,6 +845,7 @@ func pcvalue(f funcInfo, off int32, targetpc uintptr, cache *pcvalueCache, stric
 			// different offsets for the same targetpc
 			// than the other way around, so we'll usually
 			// fail in the first clause.
+			// 我们先进行检查，对于同一个targetpc，我们更有可能有多个具有不同偏移量的条目，因此通常在first子句中会失败。
 			ent := &cache.entries[x][i]
 			if ent.off == off && ent.targetpc == targetpc {
 				return ent.val
@@ -841,6 +877,8 @@ func pcvalue(f funcInfo, off int32, targetpc uintptr, cache *pcvalueCache, stric
 			// larger than the cache.
 			// Put the new element at the beginning,
 			// since it is the most likely to be newly used.
+			// 替换缓存中的随机条目。如果递归堆栈的周期略大于缓存，则随机替换可防止性能下降。
+			// 将新元素放在开头，因为它是最有可能被新使用的元素。
 			if cache != nil {
 				x := pcvalueCacheKey(targetpc)
 				e := &cache.entries[x]
@@ -859,6 +897,7 @@ func pcvalue(f funcInfo, off int32, targetpc uintptr, cache *pcvalueCache, stric
 
 	// If there was a table, it should have covered all program counters.
 	// If not, something is wrong.
+	// 如果有一个表，它应该已经覆盖了所有程序计数器。如果没有，那是不对的。
 	if panicking != 0 || !strict {
 		return -1
 	}
@@ -939,6 +978,7 @@ func funcspdelta(f funcInfo, targetpc uintptr, cache *pcvalueCache) int32 {
 }
 
 // funcMaxSPDelta returns the maximum spdelta at any point in f.
+// funcMaxSPDelta返回f中任意点的最大spdelta。
 func funcMaxSPDelta(f funcInfo) int32 {
 	datap := f.datap
 	p := datap.pclntable[f.pcsp:]
@@ -990,9 +1030,11 @@ func funcdata(f funcInfo, i uint8) unsafe.Pointer {
 }
 
 // step advances to the next pc, value pair in the encoded table.
+// 步骤前进到编码表中的下一个pc，值对。
 func step(p []byte, pc *uintptr, val *int32, first bool) (newp []byte, ok bool) {
 	// For both uvdelta and pcdelta, the common case (~70%)
 	// is that they are a single byte. If so, avoid calling readvarint.
+	// 对于uvdelta和pcdelta，通常的情况（〜70％）是它们是一个字节。如果是这样，请避免调用readvarint。
 	uvdelta := uint32(p[0])
 	if uvdelta == 0 && !first {
 		return nil, false
@@ -1015,6 +1057,7 @@ func step(p []byte, pc *uintptr, val *int32, first bool) (newp []byte, ok bool) 
 }
 
 // readvarint reads a varint from p.
+// readvarint从p读取varint。
 func readvarint(p []byte) (read uint32, val uint32) {
 	var v, shift, n uint32
 	for {
@@ -1030,9 +1073,9 @@ func readvarint(p []byte) (read uint32, val uint32) {
 }
 
 type stackmap struct {
-	n        int32   // number of bitmaps
-	nbit     int32   // number of bits in each bitmap
-	bytedata [1]byte // bitmaps, each starting on a byte boundary
+	n        int32   // number of bitmaps // 位图数量
+	nbit     int32   // number of bits in each bitmap // 每个位图中的位数
+	bytedata [1]byte // bitmaps, each starting on a byte boundary // 位图，每个位图从字节边界开始
 }
 
 //go:nowritebarrier
@@ -1040,6 +1083,7 @@ func stackmapdata(stkmap *stackmap, n int32) bitvector {
 	// Check this invariant only when stackDebug is on at all.
 	// The invariant is already checked by many of stackmapdata's callers,
 	// and disabling it by default allows stackmapdata to be inlined.
+	// 仅在完全打开stackDebug时检查此不变式。许多stackmapdata的调用者已经检查了该不变式，默认情况下将其禁用可允许内联stackmapdata。
 	if stackDebug > 0 && (n < 0 || n >= stkmap.n) {
 		throw("stackmapdata: index out of range")
 	}
@@ -1047,13 +1091,14 @@ func stackmapdata(stkmap *stackmap, n int32) bitvector {
 }
 
 // inlinedCall is the encoding of entries in the FUNCDATA_InlTree table.
+// inlinedCall是FUNCDATA_InlTree表中条目的编码。
 type inlinedCall struct {
-	parent   int16  // index of parent in the inltree, or < 0
-	funcID   funcID // type of the called function
+	parent   int16  // index of parent in the inltree, or < 0 // 父树在索引树中的索引，或<0
+	funcID   funcID // type of the called function // 被调用函数的类型
 	_        byte
-	file     int32 // fileno index into filetab
-	line     int32 // line number of the call site
-	func_    int32 // offset into pclntab for name of called function
-	parentPc int32 // position of an instruction whose source position is the call site (offset from entry)
+	file     int32 // fileno index into filetab // fileno到filetab中的索引
+	line     int32 // line number of the call site // 调用点的行号
+	func_    int32 // offset into pclntab for name of called function // 偏移到pclntab中作为被调用函数的名称
+	parentPc int32 // position of an instruction whose source position is the call site (offset from entry) // 指令的位置，该指令的源位置是调用位置（从输入位置偏移）
 }
 ```
