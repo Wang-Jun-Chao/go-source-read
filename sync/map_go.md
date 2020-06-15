@@ -22,6 +22,19 @@ import (
 // contention compared to a Go map paired with a separate Mutex or RWMutex.
 //
 // The zero Map is empty and ready for use. A Map must not be copied after first use.
+//
+// Map就像Go map[interface{}]interface{}，但是可以安全地被多个goroutine并发使用，而无需额外的锁定或协调。
+// 加载，存储和删除以摊销的固定时间运行。
+//
+// Map类型是专用的。大多数代码应改用带有单独锁定或协调功能的普通Go映射，以提高类型安全性，
+// 并使其更易于维护其他不变式以及映射内容。
+//
+// Map类型针对两种常见用例进行了优化：
+// （1）给定键的条目仅写入一次但读取多次，例如在仅增长的高速缓存中；
+// （2）当多个goroutine读取，写入时，并覆盖不相交的键集的条目。
+// 在这两种情况下，与与单独的Mutex或RWMutex配对的Go映射相比，使用Map可以显着减少锁争用。
+//
+// zero map为空，可以使用了。首次使用后不得复制map。
 type Map struct {
 	mu Mutex
 
@@ -34,7 +47,13 @@ type Map struct {
 	// Entries stored in read may be updated concurrently without mu, but updating
 	// a previously-expunged entry requires that the entry be copied to the dirty
 	// map and unexpunged with mu held.
-	read atomic.Value // readOnly
+	//
+	// read包含映射内容中可安全进行并发访问的部分（带有或不带有mu）。
+    //
+    // read字段本身始终可以安全加载，但必须仅在mu保持状态下存储。
+    //
+    // 存储在read中的条目可以不使用mu并发地更新，但是更新以前删除的条目需要将该条目复制到脏映射中，并且在保留mu的情况下不删除它。
+	read atomic.Value // readOnly // 只读
 
 	// dirty contains the portion of the map's contents that require mu to be
 	// held. To ensure that the dirty map can be promoted to the read map quickly,
@@ -46,6 +65,12 @@ type Map struct {
 	//
 	// If the dirty map is nil, the next write to the map will initialize it by
 	// making a shallow copy of the clean map, omitting stale entries.
+	//
+	// dirty包含地图内容中需要保留mu的部分。为了确保可以将脏映射迅速提升到读取映射，它还包括读取映射中的所有未删除条目。
+    //
+    // 删除的条目不会存储在脏映射中。必须先清除干净映射中已删除的条目，然后将其添加到脏映射中，然后才能将新值存储到脏映射中。
+    //
+    // 如果脏映射为nil，则对映射的下一次写入将通过创建干净映射的浅表副本（忽略陈旧的条目）来初始化它。
 	dirty map[interface{}]*entry
 
 	// misses counts the number of loads since the read map was last updated that
@@ -54,6 +79,10 @@ type Map struct {
 	// Once enough misses have occurred to cover the cost of copying the dirty
 	// map, the dirty map will be promoted to the read map (in the unamended
 	// state) and the next store to the map will make a new dirty copy.
+	//
+	// misses计数自上次更新读取映射以来锁定mu以确定key是否存在所需的负载数。
+    //
+    // 一旦发生足够的未命中以支付复制脏映射的费用，该脏映射将被提升为已读映射（处于未修改状态），并且下一个存储到该映射的存储将创建新的脏副本。
 	misses int
 }
 
