@@ -298,18 +298,23 @@ func (m *Map) LoadOrStore(key, value interface{}) (actual interface{}, loaded bo
 //
 // If the entry is expunged, tryLoadOrStore leaves the entry unchanged and
 // returns with ok==false.
+// 如果未清除该条目，则tryLoadOrStore原子加载或存储一个值。
+//
+// 如果删除了该条目，tryLoadOrStore将使该条目保持不变，并以ok == false返回。
 func (e *entry) tryLoadOrStore(i interface{}) (actual interface{}, loaded, ok bool) {
 	p := atomic.LoadPointer(&e.p)
-	if p == expunged {
+	if p == expunged { // 该条目已被删除
 		return nil, false, false
 	}
 	if p != nil {
 		return *(*interface{})(p), true, true
 	}
 
+    // 没有取到值，进行设值操作
 	// Copy the interface after the first load to make this method more amenable
 	// to escape analysis: if we hit the "load" path or the entry is expunged, we
 	// shouldn't bother heap-allocating.
+	// 在第一次加载后复制interface{}，以使此方法更易于逃逸分析：如果我们点击“加载”路径或删除了条目，则不应理会堆分配。
 	ic := i
 	for {
 		if atomic.CompareAndSwapPointer(&e.p, nil, unsafe.Pointer(&ic)) {
@@ -326,15 +331,16 @@ func (e *entry) tryLoadOrStore(i interface{}) (actual interface{}, loaded, ok bo
 }
 
 // Delete deletes the value for a key.
+// Delete删除键的值。
 func (m *Map) Delete(key interface{}) {
 	read, _ := m.read.Load().(readOnly)
 	e, ok := read.m[key]
-	if !ok && read.amended {
+	if !ok && read.amended { // readOnly中有值，并且m中有readOnly没有的key
 		m.mu.Lock()
 		read, _ = m.read.Load().(readOnly)
 		e, ok = read.m[key]
 		if !ok && read.amended {
-			delete(m.dirty, key)
+			delete(m.dirty, key) // 删除key
 		}
 		m.mu.Unlock()
 	}
@@ -365,17 +371,28 @@ func (e *entry) delete() (hadValue bool) {
 //
 // Range may be O(N) with the number of elements in the map even if f returns
 // false after a constant number of calls.
+//
+// Range会依次调用映射中的每个键和值。
+// 如果f返回false，则range停止迭代。
+//
+// Range不一定与Map内容的任何一致性快照相对应：不会多次访问任何键，但是如果同时存储或删除任何键的值，
+// Range可能会在映射期间从任何点反映该键的任何映射范围调用。
+//
+// 范围可能是O(N)，且映射中的元素数即使在恒定的调用次数后f返回false，也是如此。
 func (m *Map) Range(f func(key, value interface{}) bool) {
 	// We need to be able to iterate over all of the keys that were already
 	// present at the start of the call to Range.
 	// If read.amended is false, then read.m satisfies that property without
 	// requiring us to hold m.mu for a long time.
+	// 我们需要能够遍历在调用Range时已经存在的所有键。如果read.amended为false，则read.m满足该属性，而无需我们长时间保持m.mu。
 	read, _ := m.read.Load().(readOnly)
 	if read.amended {
 		// m.dirty contains keys not in read.m. Fortunately, Range is already O(N)
 		// (assuming the caller does not break out early), so a call to Range
 		// amortizes an entire copy of the map: we can promote the dirty copy
 		// immediately!
+		// m.dirty包含不在read.m中的键。幸运的是，Range已经是O(N)（假设调用者没有提前中断），
+		// 因此对Range的调用会摊销map的整个副本：我们可以立即升级脏副本！
 		m.mu.Lock()
 		read, _ = m.read.Load().(readOnly)
 		if read.amended {
