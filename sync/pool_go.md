@@ -76,10 +76,10 @@ type Pool struct {
 	New func() interface{}
 }
 
-// Local per-P Pool appendix.
+// Local per-P Pool appendix. // 本地每个P池附录。
 type poolLocalInternal struct {
-	private interface{} // Can be used only by the respective P.
-	shared  poolChain   // Local P can pushHead/popHead; any P can popTail.
+	private interface{} // Can be used only by the respective P. // 只能由相应的P使用。
+	shared  poolChain   // Local P can pushHead/popHead; any P can popTail. // 本地P可以pushHead/popHead； 任何P都可以popTail。
 }
 
 type poolLocal struct {
@@ -87,6 +87,7 @@ type poolLocal struct {
 
 	// Prevents false sharing on widespread platforms with
 	// 128 mod (cache line size) = 0 .
+	// 防止在128 mod（缓存行大小）= 0的广泛平台上进行虚假共享。
 	pad [128 - unsafe.Sizeof(poolLocalInternal{})%128]byte
 }
 
@@ -100,15 +101,18 @@ var poolRaceHash [128]uint64
 // directly, for fear of conflicting with other synchronization on that address.
 // Instead, we hash the pointer to get an index into poolRaceHash.
 // See discussion on golang.org/cl/31589.
+// poolRaceAddr返回一个地址，用作竞态检测器逻辑的同步点。 我们不直接使用存储在x中的实际指针，以免与该地址上的其他同步发生冲突。
+// 相反，我们对指针进行哈希处理以获取poolRaceHash的索引。
+// 请参阅golang.org/cl/31589上的讨论。
 func poolRaceAddr(x interface{}) unsafe.Pointer {
 	ptr := uintptr((*[2]unsafe.Pointer)(unsafe.Pointer(&x))[1])
 	h := uint32((uint64(uint32(ptr)) * 0x85ebca6b) >> 16)
 	return unsafe.Pointer(&poolRaceHash[h%uint32(len(poolRaceHash))])
 }
 
-// Put adds x to the pool.
+// Put adds x to the pool. // 将x添加到池中
 func (p *Pool) Put(x interface{}) {
-	if x == nil {
+	if x == nil { // 空数据不入池
 		return
 	}
 	if race.Enabled {
