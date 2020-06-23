@@ -76,7 +76,7 @@ const dequeueBits = 32
 // dequeueLimit是poolDequeue的最大大小。
 //
 // 此值最多为（1 << dequeueBits）/ 2，因为检测是否填充取决于环绕环形缓冲区而不环绕索引。 我们除以4，这样就可以容纳32位整数。
-const dequeueLimit = (1 << dequeueBits) / 4
+const dequeueLimit = (1 << dequeueBits) / 4 // 0B01000000_0000000_0000000_0000000_0000000
 
 // dequeueNil is used in poolDeqeue to represent interface{}(nil).
 // Since we use nil to represent empty slots, we need a sentinel value
@@ -264,37 +264,47 @@ type poolChainElt struct {
 	// prev is written atomically by the consumer and read
 	// atomically by the producer. It only transitions from
 	// non-nil to nil.
+	//
+	// next和prev链接到此poolChain中的相邻poolChainElts。
+    //
+    // next由生产者自动写入，由消费者自动读取。 它仅从nil过渡到non-nil。
+    //
+    // prev由消费者自动写入，由生产者自动编写。 它仅从非零过渡到零。
 	next, prev *poolChainElt
 }
 
+// 存储PoolChainElt元素
 func storePoolChainElt(pp **poolChainElt, v *poolChainElt) {
 	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(pp)), unsafe.Pointer(v))
 }
 
+// 取PoolChainElt元素值
 func loadPoolChainElt(pp **poolChainElt) *poolChainElt {
 	return (*poolChainElt)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(pp))))
 }
 
+// 向队头添加元素
 func (c *poolChain) pushHead(val interface{}) {
 	d := c.head
 	if d == nil {
-		// Initialize the chain.
-		const initSize = 8 // Must be a power of 2
+		// Initialize the chain. //初始化链表。
+		const initSize = 8 // Must be a power of 2，必须是2的指数次方
 		d = new(poolChainElt)
 		d.vals = make([]eface, initSize)
 		c.head = d
 		storePoolChainElt(&c.tail, d)
 	}
 
-	if d.pushHead(val) {
+	if d.pushHead(val) { // 插入元素
 		return
 	}
 
 	// The current dequeue is full. Allocate a new one of twice
 	// the size.
+	// 当前出队已满。 分配两倍大小的新链表。
 	newSize := len(d.vals) * 2
-	if newSize >= dequeueLimit {
-		// Can't make it any bigger.
+	if newSize >= dequeueLimit { // dequeueLimit = 0B01000000_0000000_0000000_0000000_0000000
+		// Can't make it any bigger. // 无法将其放大。
 		newSize = dequeueLimit
 	}
 
@@ -302,22 +312,25 @@ func (c *poolChain) pushHead(val interface{}) {
 	d2.vals = make([]eface, newSize)
 	c.head = d2
 	storePoolChainElt(&d.next, d2)
-	d2.pushHead(val)
+	d2.pushHead(val) // 使用d2存储元素
 }
 
+// 从头部取元素
 func (c *poolChain) popHead() (interface{}, bool) {
 	d := c.head
 	for d != nil {
-		if val, ok := d.popHead(); ok {
+		if val, ok := d.popHead(); ok { // 从当前头部中取元素
 			return val, ok
 		}
 		// There may still be unconsumed elements in the
 		// previous dequeue, so try backing up.
+		// 上一个双向队列中可能仍然有未消耗的元素，因此请尝试备份。
 		d = loadPoolChainElt(&d.prev)
 	}
 	return nil, false
 }
 
+// 从尾部取元素
 func (c *poolChain) popTail() (interface{}, bool) {
 	d := loadPoolChainElt(&c.tail)
 	if d == nil {
@@ -331,6 +344,8 @@ func (c *poolChain) popTail() (interface{}, bool) {
 		// the pop and the pop fails, then d is permanently
 		// empty, which is the only condition under which it's
 		// safe to drop d from the chain.
+		//
+		// 我们在弹出尾部之前加载下一个指针非常重要。 通常，d可能会短暂地为空，但如果pop且pop失败之前next不为nil，则d永久为空，这是唯一可以安全地从链中删除d的条件。
 		d2 := loadPoolChainElt(&d.next)
 
 		if val, ok := d.popTail(); ok {
@@ -340,6 +355,7 @@ func (c *poolChain) popTail() (interface{}, bool) {
 		if d2 == nil {
 			// This is the only dequeue. It's empty right
 			// now, but could be pushed to in the future.
+			// 这是唯一的双向队列。 它现在是空的，但将来可能会被推入元素。
 			return nil, false
 		}
 
@@ -347,11 +363,13 @@ func (c *poolChain) popTail() (interface{}, bool) {
 		// to the next dequeue. Try to drop it from the chain
 		// so the next pop doesn't have to look at the empty
 		// dequeue again.
+		// 链的尾部已排空，因此继续进行下一个出队。 尝试将其从链中删除，以便下一个弹出窗口不必再次查看空的出队。
 		if atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&c.tail)), unsafe.Pointer(d), unsafe.Pointer(d2)) {
 			// We won the race. Clear the prev pointer so
 			// the garbage collector can collect the empty
 			// dequeue and so popHead doesn't back up
 			// further than necessary.
+			// 我们赢得了竞争。 清除prev指针，以便垃圾收集器可以收集空的出队，因此popHead不会备份超出必要的范围。
 			storePoolChainElt(&d2.prev, nil)
 		}
 		d = d2

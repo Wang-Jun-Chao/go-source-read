@@ -124,11 +124,11 @@ func (p *Pool) Put(x interface{}) {
 		race.Disable()
 	}
 	l, _ := p.pin()
-	if l.private == nil {
+	if l.private == nil { // 优先放到私有缓存中
 		l.private = x
 		x = nil
 	}
-	if x != nil {
+	if x != nil { // 放到共享缓存中
 		l.shared.pushHead(x)
 	}
 	runtime_procUnpin()
@@ -145,6 +145,12 @@ func (p *Pool) Put(x interface{}) {
 //
 // If Get would otherwise return nil and p.New is non-nil, Get returns
 // the result of calling p.New.
+//
+// Get从池中选择一个任意项，将其从池中删除，然后将其返回给调用方。
+// Get可以选择忽略池并将其视为空。
+// 调用者不应假定传递给Put的值和Get返回的值之间有任何关系。
+//
+// 如果Get返回nil并且p.New不为nil，则Get返回调用p.New的结果。
 func (p *Pool) Get() interface{} {
 	if race.Enabled {
 		race.Disable()
@@ -156,6 +162,7 @@ func (p *Pool) Get() interface{} {
 		// Try to pop the head of the local shard. We prefer
 		// the head over the tail for temporal locality of
 		// reuse.
+		// 尝试弹出本地分片的头部。 对于重用的时间局部性，头部优先于尾部。
 		x, _ = l.shared.popHead()
 		if x == nil {
 			x = p.getSlow(pid)
@@ -168,17 +175,17 @@ func (p *Pool) Get() interface{} {
 			race.Acquire(poolRaceAddr(x))
 		}
 	}
-	if x == nil && p.New != nil {
+	if x == nil && p.New != nil { // 没有取到就新创建一个
 		x = p.New()
 	}
 	return x
 }
 
 func (p *Pool) getSlow(pid int) interface{} {
-	// See the comment in pin regarding ordering of the loads.
+	// See the comment in pin regarding ordering of the loads. // 有关负载的排序，请参见pin中的注释。
 	size := atomic.LoadUintptr(&p.localSize) // load-acquire
 	locals := p.local                        // load-consume
-	// Try to steal one element from other procs.
+	// Try to steal one element from other procs. // 尝试从其他进程中窃取一个元素。
 	for i := 0; i < int(size); i++ {
 		l := indexLocal(locals, (pid+i+1)%int(size))
 		if x, _ := l.shared.popTail(); x != nil {
@@ -189,6 +196,7 @@ func (p *Pool) getSlow(pid int) interface{} {
 	// Try the victim cache. We do this after attempting to steal
 	// from all primary caches because we want objects in the
 	// victim cache to age out if at all possible.
+	// 尝试受害者缓存。 我们尝试从所有主缓存中窃取后执行此操作，因为我们希望受害者缓存中的对象尽可能地老化。
 	size = atomic.LoadUintptr(&p.victimSize)
 	if uintptr(pid) >= size {
 		return nil
@@ -208,6 +216,7 @@ func (p *Pool) getSlow(pid int) interface{} {
 
 	// Mark the victim cache as empty for future gets don't bother
 	// with it.
+	// 将受害者缓存标记为空，以备将来使用时不要打扰。
 	atomic.StoreUintptr(&p.victimSize, 0)
 
 	return nil
@@ -216,12 +225,19 @@ func (p *Pool) getSlow(pid int) interface{} {
 // pin pins the current goroutine to P, disables preemption and
 // returns poolLocal pool for the P and the P's id.
 // Caller must call runtime_procUnpin() when done with the pool.
+// pin将当前goroutine固定为P，禁用抢占并返回P和P的ID的poolLocal pool。
+// 完成对池的操作后，调用者必须调用runtime_procUnpin（）。
 func (p *Pool) pin() (*poolLocal, int) {
 	pid := runtime_procPin()
 	// In pinSlow we store to local and then to localSize, here we load in opposite order.
 	// Since we've disabled preemption, GC cannot happen in between.
 	// Thus here we must observe local at least as large localSize.
 	// We can observe a newer/larger local, it is fine (we must observe its zero-initialized-ness).
+	//
+	// 在pinSlow中，我们先存储到local，然后再存储到localSize，这里我们以相反的顺序加载。
+    // 由于我们已禁用抢占，因此GC不能在两者之间发生。
+    // 因此，在这里我们必须观察local至少与localSize一样大。
+    // 我们可以观察到一个新的/更大的local，这很好（我们必须观察其零初始化度）。
 	s := atomic.LoadUintptr(&p.localSize) // load-acquire
 	l := p.local                          // load-consume
 	if uintptr(pid) < s {
@@ -233,11 +249,13 @@ func (p *Pool) pin() (*poolLocal, int) {
 func (p *Pool) pinSlow() (*poolLocal, int) {
 	// Retry under the mutex.
 	// Can not lock the mutex while pinned.
+	// 在互斥锁下重试。 pin后无法锁定互斥锁。
 	runtime_procUnpin()
 	allPoolsMu.Lock()
 	defer allPoolsMu.Unlock()
 	pid := runtime_procPin()
 	// poolCleanup won't be called while we are pinned.
+	// 当我们pin时，不会调用poolCleanup。
 	s := p.localSize
 	l := p.local
 	if uintptr(pid) < s {
@@ -247,6 +265,7 @@ func (p *Pool) pinSlow() (*poolLocal, int) {
 		allPools = append(allPools, p)
 	}
 	// If GOMAXPROCS changes between GCs, we re-allocate the array and lose the old one.
+	// 如果GOMAXPROCS在GC之间更改，我们将重新分配该数组，并丢失旧数组。
 	size := runtime.GOMAXPROCS(0)
 	local := make([]poolLocal, size)
 	atomic.StorePointer(&p.local, unsafe.Pointer(&local[0])) // store-release
@@ -257,17 +276,19 @@ func (p *Pool) pinSlow() (*poolLocal, int) {
 func poolCleanup() {
 	// This function is called with the world stopped, at the beginning of a garbage collection.
 	// It must not allocate and probably should not call any runtime functions.
+	// 在垃圾回收开始时，在全局停止的情况下调用此函数。 它不得分配，并且可能不应调用任何运行时函数。
 
 	// Because the world is stopped, no pool user can be in a
 	// pinned section (in effect, this has all Ps pinned).
+	// 因为全局已停止，所以没有任何池用户可以处于pin代码段（实际上，所有P都固定了）。
 
-	// Drop victim caches from all pools.
+	// Drop victim caches from all pools. // 从所有池中删除受害者缓存。
 	for _, p := range oldPools {
 		p.victim = nil
 		p.victimSize = 0
 	}
 
-	// Move primary cache to victim cache.
+	// Move primary cache to victim cache. // 将主缓存移到受害者缓存。
 	for _, p := range allPools {
 		p.victim = p.local
 		p.victimSize = p.localSize
@@ -277,6 +298,7 @@ func poolCleanup() {
 
 	// The pools with non-empty primary caches now have non-empty
 	// victim caches and no pools have primary caches.
+	// 具有非空主缓存的池现在具有非空受害者缓存，没有池具有主缓存。
 	oldPools, allPools = allPools, nil
 }
 
@@ -286,10 +308,12 @@ var (
 	// allPools is the set of pools that have non-empty primary
 	// caches. Protected by either 1) allPoolsMu and pinning or 2)
 	// STW.
+	// allPools是具有非空主缓存的池的集合。 由1）allPoolsMu和pinning 或2）STW保护。
 	allPools []*Pool
 
 	// oldPools is the set of pools that may have non-empty victim
 	// caches. Protected by STW.
+	// oldPools是可能具有非空受害者缓存的一组池。 受STW保护。
 	oldPools []*Pool
 )
 
